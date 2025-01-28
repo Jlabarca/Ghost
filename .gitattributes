@@ -1,0 +1,9 @@
+* text=auto eol=lf
+*.cs text diff=csharp
+*.csproj text
+*.sln text
+*.md text
+*.json text
+*.sh text eol=lf
+*.{cmd,[cC][mM][dD]} text eol=crlf
+*.{bat,[bB][aA][tT]} text eol=crlf

@@ -1,13 +1,33 @@
 using System.Diagnostics;
 using System.Text;
+using Spectre.Console;
 
 namespace Ghost.Infrastructure
 {
     public class ProcessRunner
     {
+        private readonly bool _debug;
+
+        public ProcessRunner(bool debug = false)
+        {
+            _debug = debug;
+        }
+
+        private void LogDebug(string message)
+        {
+            if (_debug)
+            {
+                AnsiConsole.MarkupLine($"[grey]DEBUG: {message.EscapeMarkup()}[/]");
+            }
+        }
+
         // Run a process synchronously and capture output
         public ProcessResult RunProcess(string command, string[] args, string workingDirectory = null)
         {
+            var fullCommand = $"{command} {string.Join(" ", args)}";
+            LogDebug($"Executing command: {fullCommand}");
+            LogDebug($"Working directory: {workingDirectory ?? Environment.CurrentDirectory}");
+
             var startInfo = new ProcessStartInfo
             {
                 FileName = command,
@@ -28,6 +48,7 @@ namespace Ghost.Infrastructure
                 if (e.Data != null)
                 {
                     output.AppendLine(e.Data);
+                    LogDebug($"Output: {e.Data}");
                 }
             };
 
@@ -36,6 +57,7 @@ namespace Ghost.Infrastructure
                 if (e.Data != null)
                 {
                     error.AppendLine(e.Data);
+                    LogDebug($"Error: {e.Data}");
                 }
             };
 
@@ -46,15 +68,19 @@ namespace Ghost.Infrastructure
                 process.BeginErrorReadLine();
                 process.WaitForExit();
 
-                return new ProcessResult
+                var result = new ProcessResult
                 {
                     ExitCode = process.ExitCode,
                     StandardOutput = output.ToString().TrimEnd(),
                     StandardError = error.ToString().TrimEnd()
                 };
+
+                LogDebug($"Process exited with code: {result.ExitCode}");
+                return result;
             }
             catch (Exception ex)
             {
+                LogDebug($"Process execution failed: {ex.Message}");
                 throw new GhostException(
                     $"Failed to execute command '{command}': {ex.Message}",
                     ErrorCode.ProcessError);
@@ -63,13 +89,17 @@ namespace Ghost.Infrastructure
 
         // Run a process asynchronously and capture output
         public async Task<ProcessResult> RunProcessAsync(
-            string command, 
-            string[] args, 
+            string command,
+            string[] args,
             string workingDirectory = null,
             Action<string> outputCallback = null,
             Action<string> errorCallback = null,
             CancellationToken cancellationToken = default)
         {
+            var fullCommand = $"{command} {string.Join(" ", args)}";
+            LogDebug($"Executing async command: {fullCommand}");
+            LogDebug($"Working directory: {workingDirectory ?? Environment.CurrentDirectory}");
+
             var startInfo = new ProcessStartInfo
             {
                 FileName = command,
@@ -90,6 +120,7 @@ namespace Ghost.Infrastructure
                 if (e.Data != null)
                 {
                     output.AppendLine(e.Data);
+                    LogDebug($"Output: {e.Data}");
                     outputCallback?.Invoke(e.Data);
                 }
             };
@@ -99,6 +130,7 @@ namespace Ghost.Infrastructure
                 if (e.Data != null)
                 {
                     error.AppendLine(e.Data);
+                    LogDebug($"Error: {e.Data}");
                     errorCallback?.Invoke(e.Data);
                 }
             };
@@ -108,6 +140,7 @@ namespace Ghost.Infrastructure
                 var processStarted = process.Start();
                 if (!processStarted)
                 {
+                    LogDebug($"Failed to start process: {command}");
                     throw new GhostException(
                         $"Failed to start process '{command}'",
                         ErrorCode.ProcessError);
@@ -123,30 +156,36 @@ namespace Ghost.Infrastructure
                     {
                         if (!process.HasExited)
                         {
+                            LogDebug("Cancellation requested - killing process");
                             process.Kill(entireProcessTree: true);
                         }
                     }
                     catch
                     {
-                        // Best effort to kill the process
+                        LogDebug("Failed to kill process during cancellation");
                     }
                 });
 
                 await process.WaitForExitAsync(cancellationToken);
 
-                return new ProcessResult
+                var result = new ProcessResult
                 {
                     ExitCode = process.ExitCode,
                     StandardOutput = output.ToString().TrimEnd(),
                     StandardError = error.ToString().TrimEnd()
                 };
+
+                LogDebug($"Async process exited with code: {result.ExitCode}");
+                return result;
             }
             catch (OperationCanceledException)
             {
+                LogDebug("Process was cancelled");
                 throw;
             }
             catch (Exception ex)
             {
+                LogDebug($"Async process execution failed: {ex.Message}");
                 throw new GhostException(
                     $"Failed to execute command '{command}': {ex.Message}",
                     ErrorCode.ProcessError);
@@ -167,6 +206,10 @@ namespace Ghost.Infrastructure
                 allArgs.AddRange(passthroughArgs);
             }
 
+            var fullCommand = $"{command} {string.Join(" ", allArgs)}";
+            LogDebug($"Executing interactive command: {fullCommand}");
+            LogDebug($"Working directory: {workDir}");
+
             var startInfo = new ProcessStartInfo
             {
                 FileName = command,
@@ -180,22 +223,29 @@ namespace Ghost.Infrastructure
             };
 
             // Set environment variables
-            foreach (var variable in GetInheritedEnvironmentVariables())
+            var envVars = GetInheritedEnvironmentVariables();
+            foreach (var variable in envVars)
             {
                 startInfo.Environment[variable.Key] = variable.Value;
+                LogDebug($"Setting environment variable: {variable.Key}={variable.Value}");
             }
 
             try
             {
                 using var process = new Process { StartInfo = startInfo };
-                
                 process.Start();
+
+                LogDebug("Interactive process started");
                 await process.WaitForExitAsync();
-                
-                return process.ExitCode;
+
+                var exitCode = process.ExitCode;
+                LogDebug($"Interactive process exited with code: {exitCode}");
+
+                return exitCode;
             }
             catch (Exception ex)
             {
+                LogDebug($"Interactive process execution failed: {ex.Message}");
                 throw new GhostException(
                     $"Failed to execute command '{command}': {ex.Message}",
                     ErrorCode.ProcessError);

@@ -19,7 +19,6 @@ public class ConfigManager : IDisposable
             settings = {
                 -- Example: githubToken = "your-token"
             },
-            
             -- Aliases
             aliases = {
                 -- Example: myapp = "https://github.com/user/app"
@@ -46,16 +45,22 @@ public class ConfigManager : IDisposable
 
     public ConfigManager()
     {
+        // Store local workspace configs in AppData/Local
         _configPath = Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
             "Ghost");
-        _ghostConfigFile = ".ghost";
-        _globalConfigFile = Path.Combine(_configPath, "config.lua");
-        _lua = new Lua();
 
+        // Local project config file
+        _ghostConfigFile = ".ghost";
+
+        // Global config in user's home directory
+        _globalConfigFile = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+            ".ghostrc.lua");
+
+        _lua = new Lua();
         _aliases = new Dictionary<string, string>();
         _settings = new Dictionary<string, string>();
-
         LoadSettings();
     }
 
@@ -92,7 +97,6 @@ public class ConfigManager : IDisposable
                 LoadLuaFile(_ghostConfigFile);
                 var localConfig = _lua.GetTable("config");
                 var localSettings = GetDictionaryFromLuaTable(localConfig["settings"] as LuaTable);
-
                 if (localSettings.TryGetValue(key, out var value))
                 {
                     return value;
@@ -112,7 +116,11 @@ public class ConfigManager : IDisposable
         // Create default global config if it doesn't exist
         if (!File.Exists(_globalConfigFile))
         {
-            Directory.CreateDirectory(_configPath);
+            var configDir = Path.GetDirectoryName(_globalConfigFile);
+            if (!string.IsNullOrEmpty(configDir))
+            {
+                Directory.CreateDirectory(configDir);
+            }
             File.WriteAllText(_globalConfigFile, DefaultConfig);
         }
 
@@ -161,7 +169,6 @@ public class ConfigManager : IDisposable
 
         // Add helper functions
         configBuilder.AppendLine("""
-
             function addAlias(name, url)
                 config.aliases[name] = url
             end
@@ -177,7 +184,6 @@ public class ConfigManager : IDisposable
             return config
             """);
 
-        Directory.CreateDirectory(_configPath);
         File.WriteAllText(_globalConfigFile, configBuilder.ToString());
     }
 
@@ -199,7 +205,6 @@ public class ConfigManager : IDisposable
                 dict[key.ToString()] = value;
             }
         }
-
         return dict;
     }
 

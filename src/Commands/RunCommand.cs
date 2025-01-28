@@ -1,45 +1,63 @@
-using System;
-using System.ComponentModel;
-using System.Threading.Tasks;
 using Ghost.Infrastructure;
 using Ghost.Services;
+using System.ComponentModel;
 using Spectre.Console;
 using Spectre.Console.Cli;
 
-namespace Ghost.Commands
+namespace Ghost.Commands;
+
+public class RunCommand : AsyncCommand<RunCommand.Settings>
 {
-    public class RunCommand : AsyncCommand<RunCommand.Settings>
+  private readonly AppRunner _appRunner;
+  private readonly AliasManager _aliasManager;
+
+  public class Settings : CommandSettings
+  {
+    [CommandOption("--url <URL>")]
+    [Description("The repository URL to run the application from.")]
+    public string Url { get; set; }
+
+    [CommandArgument(0, "[Args...]")]
+    [Description("Arguments to pass to the application")]
+    public string[] Args { get; set; }
+  }
+
+  public RunCommand(AppRunner appRunner, AliasManager aliasManager)
+  {
+    _appRunner = appRunner;
+    _aliasManager = aliasManager;
+  }
+
+  public override async Task<int> ExecuteAsync(CommandContext context, Settings settings)
+  {
+    try
     {
-        private readonly AppRunner _appRunner;
+      var url = settings.Url;
 
-        public class Settings : CommandSettings
+      // If URL is not provided, check if it's an alias
+      if (string.IsNullOrEmpty(url) && settings.Args?.Length > 0)
+      {
+        var potentialAlias = settings.Args[0];
+        url = _aliasManager.GetAliasUrl(potentialAlias);
+        if (url != null)
         {
-            [CommandOption("--url <URL>")]
-            [Description("The repository URL to run the application from.")]
-            public string Url { get; set; }
-
-            [CommandArgument(0, "[Args...]")]
-            [Description("Arguments to pass to the application")]
-            public string[] Args { get; set; }
+          // Remove the alias from the args
+          settings.Args = settings.Args.Skip(1).ToArray();
         }
+      }
 
-        public RunCommand(AppRunner appRunner)
-        {
-            _appRunner = appRunner;
-        }
+      if (string.IsNullOrEmpty(url))
+      {
+        throw new GhostException("No URL or valid alias provided");
+      }
 
-        public override async Task<int> ExecuteAsync(CommandContext context, Settings settings)
-        {
-            try
-            {
-                AnsiConsole.MarkupLine($"Running application from [blue]{settings.Url}[/]");
-                return await _appRunner.RunAsync(settings.Url, settings.Args ?? Array.Empty<string>());
-            }
-            catch (GhostException ex)
-            {
-                AnsiConsole.MarkupLine($"[red]Error:[/] {ex.UserMessage}");
-                return 1;
-            }
-        }
+      AnsiConsole.MarkupLine($"Running application from [blue]{url}[/]");
+      return await _appRunner.RunAsync(url, settings.Args ?? Array.Empty<string>());
     }
+    catch (GhostException ex)
+    {
+      AnsiConsole.MarkupLine($"[red]Error:[/] {ex.UserMessage}");
+      return 1;
+    }
+  }
 }

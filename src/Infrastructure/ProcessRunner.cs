@@ -1,17 +1,10 @@
-using System;
-using System.Collections.Generic;
 using System.Diagnostics;
 using System.Text;
-using System.Threading.Tasks;
-using Spectre.Console;
 
 namespace Ghost.Infrastructure
 {
     public class ProcessRunner
     {
-        public ProcessRunner()
-        {
-        }
         // Run a process synchronously and capture output
         public ProcessResult RunProcess(string command, string[] args, string workingDirectory = null)
         {

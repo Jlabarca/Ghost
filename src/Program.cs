@@ -15,14 +15,14 @@ public static class Program
         var services = new ServiceCollection();
 
         // Register infrastructure services
-        services.AddSingleton<ProcessRunner>();
         services.AddSingleton<ConfigManager>();
+        services.AddSingleton<GhostLogger>();
+        services.AddSingleton<ProcessRunner>();
         services.AddSingleton<GithubService>();
 
         // Register application services
         services.AddSingleton<ProjectGenerator>();
         services.AddSingleton<AppRunner>();
-        services.AddSingleton<AliasManager>();
 
         // Register commands
         services.AddSingleton<RunCommand>();
@@ -42,20 +42,28 @@ public static class Program
 
             config.AddCommand<RunCommand>("run")
                 .WithDescription("Run a Ghost application from a repository")
-                .WithExample(new[] { "run", "--url", "https://github.com/user/app", "--", "hello", "--name", "World" });
+                .WithExample("run", "--url", "https://github.com/user/app", "--", "hello", "--name", "World");
 
             config.AddCommand<CreateCommand>("create")
                 .WithDescription("Create a new Ghost application")
-                .WithExample(new[] { "create", "MyApp" });
+                .WithExample("create", "MyApp");
 
             config.AddCommand<AliasCommand>("alias")
                 .WithDescription("Manage aliases for Ghost applications")
-                .WithExample(new[] { "alias", "--create", "myapp", "--url", "https://github.com/user/app" })
-                .WithExample(new[] { "alias", "--remove", "myapp" });
+                .WithExample("alias", "--create", "myapp", "--url", "https://github.com/user/app")
+                .WithExample("alias", "--remove", "myapp");
 
             config.AddCommand<PushCommand>("push")
                 .WithDescription("Push a Ghost application to a remote git repository")
-                .WithExample(new[] { "push", "--token", "my-github-token" });
+                .WithExample("push", "--token", "my-github-token");
+
+            config.AddCommand<PushCommand>("clean")
+                .WithDescription("Clean up the Ghost CLI cache")
+                .WithExample("clean");
+
+            config.AddCommand<InstallCommand>("install")
+                    .WithDescription("Install Ghost CLI system-wide")
+                    .WithExample("install", "--workspace", "/custom/path");
         });
 
         return app.Run(args);

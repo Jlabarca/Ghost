@@ -13,52 +13,61 @@ namespace Ghost.Services
             _processRunner = processRunner;
             _workspacePath = Path.Combine(
                 Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-                "Ghost", "workspace");
+                "Ghost",
+                "workspace");
         }
 
-        public async Task<int> RunAsync(string url, string[] args)
+        public async Task<int> RunAsync(string url, string[] args, string instanceId)
         {
-            // Create workspace directory
-            var workDir = Path.Combine(_workspacePath, Path.GetRandomFileName());
+            var projectName = new Uri(url).Segments.Last().TrimEnd('/');
+            var timestamp = DateTime.Now.ToString("yyyyMMddHHmmss");
+            var workDir = Path.Combine(_workspacePath, $"{projectName}_{timestamp}");
+
+            AnsiConsole.MarkupLine($"[grey]Creating workspace directory: {workDir}[/]");
             Directory.CreateDirectory(workDir);
 
             try
             {
-                // Clone repository
-                AnsiConsole.Status()
-                    .Start("Cloning repository...", ctx =>
+                AnsiConsole.Status().Start("Cloning repository...", ctx =>
+                {
+                    var result = _processRunner.RunProcess("git", new[] { "clone", url, workDir });
+                    if (result.ExitCode != 0)
                     {
-                        var result = _processRunner.RunProcess("git", new[] { "clone", url, workDir });
-                        if (result != null)
-                        {
-                            throw new GhostException("Failed to clone repository");
-                        }
-                    });
+                        throw new GhostException($"Failed to clone repository: {result.StandardError}");
+                    }
+                });
 
-                // Build project
-                AnsiConsole.Status()
-                    .Start("Building project...", ctx =>
+                AnsiConsole.Status().Start("Building project...", ctx =>
+                {
+                    var result = _processRunner.RunProcess("dotnet", new[] { "build", workDir });
+                    if (result.ExitCode != 0)
                     {
-                        var result = _processRunner.RunProcess("dotnet", new[] { "build", workDir });
-                        if (result != null)
-                        {
-                            throw new GhostException("Failed to build project");
-                        }
-                    });
+                        throw new GhostException($"Failed to build project: {result.StandardError}");
+                    }
+                });
 
-                // Run application
-                return await _processRunner.RunWithArgsAsync("dotnet", new[] { "run", "--project", workDir }, args, workDir);
+                // Construct the final command with all arguments
+                var dotnetArgs = new List<string> { "run", "--project", workDir };
+                if (args?.Length > 0)
+                {
+                    dotnetArgs.Add("--");  // Add separator before user arguments
+                    dotnetArgs.AddRange(args);
+                }
+
+                var passArgs = new List<string> { "run", "--project", workDir };
+                return await _processRunner.RunWithArgsAsync("dotnet", dotnetArgs.ToArray(), passArgs.ToArray(), workDir, instanceId);
             }
             finally
             {
-                // Cleanup
                 try
                 {
+                    AnsiConsole.MarkupLine("[grey]Cleaning up workspace...[/]");
                     Directory.Delete(workDir, recursive: true);
                 }
-                catch
+                catch (Exception ex)
                 {
-                    // Best effort cleanup
+                    AnsiConsole.MarkupLine($"[yellow]Warning:[/] Workspace cleanup incomplete: {ex.Message}");
+                    AnsiConsole.MarkupLine($"[grey]You may need to manually delete: {workDir}[/]");
                 }
             }
         }

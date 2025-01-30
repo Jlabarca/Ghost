@@ -1,3 +1,4 @@
+using Ghost.Services;
 using NLua;
 using System.Text;
 
@@ -211,5 +212,9 @@ public class ConfigManager : IDisposable
     public void Dispose()
     {
         _lua?.Dispose();
+    }
+    public WorkspaceSettings GetWorkspaceSettings()
+    {
+        throw new NotImplementedException(); //TODO: Implement this method
     }
 }

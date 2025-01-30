@@ -6,11 +6,132 @@ namespace Ghost.Infrastructure
 {
     public class ProcessRunner
     {
+        public class ProcessOutputEventArgs : EventArgs
+        {
+            public string Data { get; }
+            public bool IsError { get; }
+            public ProcessOutputEventArgs(string data, bool isError)
+            {
+                Data = data;
+                IsError = isError;
+            }
+        }
+
+        public event EventHandler<ProcessOutputEventArgs> OutputReceived;
+
+        private readonly GhostLogger _logger;
         private readonly bool _debug;
 
-        public ProcessRunner(bool debug = false)
+        public ProcessRunner(GhostLogger logger, bool debug = false)
         {
+            _logger = logger;
             _debug = debug;
+        }
+
+        private void OnOutputReceived(string data, bool isError)
+        {
+            OutputReceived?.Invoke(this, new ProcessOutputEventArgs(data, isError));
+        }
+
+        public async Task<int> RunWithArgsAsync(
+            string command,
+            string[] appArgs,
+            string[] passthroughArgs,
+            string workDir,
+            string instanceId)
+        {
+            var allArgs = new List<string>(appArgs);
+            if (passthroughArgs?.Length > 0)
+            {
+                allArgs.AddRange(passthroughArgs);
+            }
+
+            var fullCommand = $"{command} {string.Join(" ", allArgs)}";
+            _logger.Log(instanceId, $"Executing command: {fullCommand}");
+            _logger.Log(instanceId, $"Working directory: {workDir}");
+
+            var startInfo = new ProcessStartInfo
+            {
+                FileName = command,
+                Arguments = string.Join(" ", allArgs),
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                RedirectStandardInput = true,
+                UseShellExecute = false,
+                CreateNoWindow = true,
+                WorkingDirectory = workDir
+            };
+
+            // Set environment variables
+            foreach (var variable in GetInheritedEnvironmentVariables())
+            {
+                startInfo.Environment[variable.Key] = variable.Value;
+                LogDebug($"Setting environment variable: {variable.Key}={variable.Value}");
+            }
+
+            try
+            {
+                using var process = new Process { StartInfo = startInfo };
+
+                process.OutputDataReceived += (sender, e) =>
+                {
+                    if (e.Data != null)
+                    {
+                        Console.WriteLine(e.Data);
+                        _logger.Log(instanceId, $"[OUT] {e.Data}");
+                        OnOutputReceived(e.Data, false);
+                    }
+                };
+
+                process.ErrorDataReceived += (sender, e) =>
+                {
+                    if (e.Data != null)
+                    {
+                        Console.Error.WriteLine(e.Data);
+                        _logger.Log(instanceId, $"[ERR] {e.Data}");
+                        OnOutputReceived(e.Data, true);
+                    }
+                };
+
+                process.Start();
+                _logger.Log(instanceId, "Process started");
+
+                process.BeginOutputReadLine();
+                process.BeginErrorReadLine();
+
+                // Handle standard input
+                var inputTask = Task.Run(() =>
+                {
+                    try
+                    {
+                        while (!process.HasExited)
+                        {
+                            var input = Console.ReadLine();
+                            if (input != null)
+                            {
+                                process.StandardInput.WriteLine(input);
+                                _logger.Log(instanceId, $"[IN] {input}");
+                            }
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.Log(instanceId, $"Input handling error: {ex.Message}");
+                    }
+                });
+
+                await process.WaitForExitAsync();
+                var exitCode = process.ExitCode;
+                _logger.Log(instanceId, $"Process exited with code: {exitCode}");
+                return exitCode;
+            }
+            catch (Exception ex)
+            {
+                _logger.Log(instanceId, $"Process execution failed: {ex.Message}");
+                throw new GhostException(
+                    $"Failed to execute command '{command}': {ex.Message}",
+                    ErrorCode.ProcessError);
+            }
         }
 
         private void LogDebug(string message)
@@ -284,7 +405,7 @@ namespace Ghost.Infrastructure
         public int ExitCode { get; init; }
         public string StandardOutput { get; init; }
         public string StandardError { get; init; }
-        
+
         public bool Success => ExitCode == 0;
 
         public void EnsureSuccessfulExit()
@@ -294,7 +415,7 @@ namespace Ghost.Infrastructure
                 var error = string.IsNullOrEmpty(StandardError)
                     ? StandardOutput
                     : StandardError;
-                    
+
                 throw new GhostException(
                     $"Process failed with exit code {ExitCode}: {error}",
                     ErrorCode.ProcessError);

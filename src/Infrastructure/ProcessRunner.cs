@@ -1,24 +1,12 @@
 using System.Diagnostics;
 using System.Text;
+using Ghost.Infrastructure;
 using Spectre.Console;
 
-namespace Ghost.Infrastructure
+namespace Ghost.Services
 {
     public class ProcessRunner
     {
-        public class ProcessOutputEventArgs : EventArgs
-        {
-            public string Data { get; }
-            public bool IsError { get; }
-            public ProcessOutputEventArgs(string data, bool isError)
-            {
-                Data = data;
-                IsError = isError;
-            }
-        }
-
-        public event EventHandler<ProcessOutputEventArgs> OutputReceived;
-
         private readonly GhostLogger _logger;
         private readonly bool _debug;
 
@@ -28,121 +16,142 @@ namespace Ghost.Infrastructure
             _debug = debug;
         }
 
-        private void OnOutputReceived(string data, bool isError)
-        {
-            OutputReceived?.Invoke(this, new ProcessOutputEventArgs(data, isError));
-        }
-
-        public async Task<int> RunWithArgsAsync(
+        /// <summary>
+        /// Runs a process asynchronously with full control over output handling and cancellation.
+        /// Think of this as a smart controller that can manage and monitor any process.
+        /// </summary>
+        public async Task<ProcessResult> RunProcessAsync(
             string command,
-            string[] appArgs,
-            string[] passthroughArgs,
-            string workDir,
-            string instanceId)
+            string[] args,
+            string workingDirectory = null,
+            Action<string> outputCallback = null,
+            Action<string> errorCallback = null,
+            CancellationToken cancellationToken = default)
         {
-            var allArgs = new List<string>(appArgs);
-            if (passthroughArgs?.Length > 0)
-            {
-                allArgs.AddRange(passthroughArgs);
-            }
-
-            var fullCommand = $"{command} {string.Join(" ", allArgs)}";
-            _logger.Log(instanceId, $"Executing command: {fullCommand}");
-            _logger.Log(instanceId, $"Working directory: {workDir}");
-
+            // Build the process configuration - like setting up automation rules
             var startInfo = new ProcessStartInfo
             {
                 FileName = command,
-                Arguments = string.Join(" ", allArgs),
+                Arguments = string.Join(" ", args),
                 RedirectStandardOutput = true,
                 RedirectStandardError = true,
-                RedirectStandardInput = true,
+                RedirectStandardInput = false, // We're not handling input in this version
                 UseShellExecute = false,
                 CreateNoWindow = true,
-                WorkingDirectory = workDir
+                WorkingDirectory = workingDirectory ?? Environment.CurrentDirectory
             };
 
-            // Set environment variables
-            foreach (var variable in GetInheritedEnvironmentVariables())
+            // Log the command if in debug mode
+            LogDebug($"Executing: {command} {string.Join(" ", args)}");
+            LogDebug($"Working directory: {startInfo.WorkingDirectory}");
+
+            // Set up our output collection system - like installing sensors
+            using var process = new Process { StartInfo = startInfo };
+            var outputBuilder = new StringBuilder();
+            var errorBuilder = new StringBuilder();
+
+            // Wire up our output handlers - like connecting monitoring devices
+            process.OutputDataReceived += (sender, e) =>
             {
-                startInfo.Environment[variable.Key] = variable.Value;
-                LogDebug($"Setting environment variable: {variable.Key}={variable.Value}");
-            }
+                if (e.Data != null)
+                {
+                    outputBuilder.AppendLine(e.Data);
+                    outputCallback?.Invoke(e.Data);
+                    LogDebug($"Output: {e.Data}");
+                }
+            };
+
+            process.ErrorDataReceived += (sender, e) =>
+            {
+                if (e.Data != null)
+                {
+                    errorBuilder.AppendLine(e.Data);
+                    errorCallback?.Invoke(e.Data);
+                    LogDebug($"Error: {e.Data}");
+                }
+            };
 
             try
             {
-                using var process = new Process { StartInfo = startInfo };
-
-                process.OutputDataReceived += (sender, e) =>
+                // Start the process - like turning on the system
+                var processStarted = process.Start();
+                if (!processStarted)
                 {
-                    if (e.Data != null)
-                    {
-                        Console.WriteLine(e.Data);
-                        _logger.Log(instanceId, $"[OUT] {e.Data}");
-                        OnOutputReceived(e.Data, false);
-                    }
-                };
+                    throw new GhostException(
+                        $"Failed to start process: {command}",
+                        ErrorCode.ProcessError);
+                }
 
-                process.ErrorDataReceived += (sender, e) =>
-                {
-                    if (e.Data != null)
-                    {
-                        Console.Error.WriteLine(e.Data);
-                        _logger.Log(instanceId, $"[ERR] {e.Data}");
-                        OnOutputReceived(e.Data, true);
-                    }
-                };
-
-                process.Start();
-                _logger.Log(instanceId, "Process started");
-
+                // Begin capturing output - like starting to record
                 process.BeginOutputReadLine();
                 process.BeginErrorReadLine();
 
-                // Handle standard input
-                var inputTask = Task.Run(() =>
+                // Set up cancellation handler - like wiring up the emergency stop
+                using var cancellationRegistration = cancellationToken.Register(() =>
                 {
                     try
                     {
-                        while (!process.HasExited)
+                        if (!process.HasExited)
                         {
-                            var input = Console.ReadLine();
-                            if (input != null)
-                            {
-                                process.StandardInput.WriteLine(input);
-                                _logger.Log(instanceId, $"[IN] {input}");
-                            }
+                            LogDebug("Cancellation requested - stopping process");
+                            process.Kill(entireProcessTree: true);
                         }
                     }
                     catch (Exception ex)
                     {
-                        _logger.Log(instanceId, $"Input handling error: {ex.Message}");
+                        LogDebug($"Failed to kill process during cancellation: {ex.Message}");
                     }
                 });
 
-                await process.WaitForExitAsync();
-                var exitCode = process.ExitCode;
-                _logger.Log(instanceId, $"Process exited with code: {exitCode}");
-                return exitCode;
+                try
+                {
+                    // Wait for process completion or cancellation - like monitoring until task completion
+                    await process.WaitForExitAsync(cancellationToken);
+                }
+                catch (OperationCanceledException)
+                {
+                    LogDebug("Process was cancelled");
+                    throw;
+                }
+
+                // Package up the results - like preparing the final report
+                var result = new ProcessResult
+                {
+                    ExitCode = process.ExitCode,
+                    StandardOutput = outputBuilder.ToString().TrimEnd(),
+                    StandardError = errorBuilder.ToString().TrimEnd()
+                };
+
+                LogDebug($"Process completed with exit code: {result.ExitCode}");
+                return result;
             }
-            catch (Exception ex)
+            catch (Exception ex) when (ex is not OperationCanceledException)
             {
-                _logger.Log(instanceId, $"Process execution failed: {ex.Message}");
+                // Handle unexpected errors - like system malfunction alerts
+                LogDebug($"Process execution failed: {ex.Message}");
                 throw new GhostException(
                     $"Failed to execute command '{command}': {ex.Message}",
                     ErrorCode.ProcessError);
             }
         }
 
-        private void LogDebug(string message)
+        // Helper method for running simpler processes
+        public async Task<ProcessResult> RunQuickProcessAsync(
+            string command,
+            string[] args,
+            string workingDirectory = null)
         {
-            if (_debug)
-            {
-                AnsiConsole.MarkupLine($"[grey]DEBUG: {message.EscapeMarkup()}[/]");
-            }
+            return await RunProcessAsync(
+                command,
+                args,
+                workingDirectory,
+                outputCallback: null,
+                errorCallback: null);
         }
 
-        // Run a process synchronously and capture output
+        /// <summary>
+        /// Runs a process synchronously and captures its output.
+        /// </summary>
         public ProcessResult RunProcess(string command, string[] args, string workingDirectory = null)
         {
             var fullCommand = $"{command} {string.Join(" ", args)}";
@@ -208,195 +217,13 @@ namespace Ghost.Infrastructure
             }
         }
 
-        // Run a process asynchronously and capture output
-        public async Task<ProcessResult> RunProcessAsync(
-            string command,
-            string[] args,
-            string workingDirectory = null,
-            Action<string> outputCallback = null,
-            Action<string> errorCallback = null,
-            CancellationToken cancellationToken = default)
+        private void LogDebug(string message)
         {
-            var fullCommand = $"{command} {string.Join(" ", args)}";
-            LogDebug($"Executing async command: {fullCommand}");
-            LogDebug($"Working directory: {workingDirectory ?? Environment.CurrentDirectory}");
-
-            var startInfo = new ProcessStartInfo
+            if (_debug)
             {
-                FileName = command,
-                Arguments = string.Join(" ", args),
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                UseShellExecute = false,
-                CreateNoWindow = true,
-                WorkingDirectory = workingDirectory ?? Environment.CurrentDirectory
-            };
-
-            using var process = new Process { StartInfo = startInfo };
-            var output = new StringBuilder();
-            var error = new StringBuilder();
-
-            process.OutputDataReceived += (sender, e) =>
-            {
-                if (e.Data != null)
-                {
-                    output.AppendLine(e.Data);
-                    LogDebug($"Output: {e.Data}");
-                    outputCallback?.Invoke(e.Data);
-                }
-            };
-
-            process.ErrorDataReceived += (sender, e) =>
-            {
-                if (e.Data != null)
-                {
-                    error.AppendLine(e.Data);
-                    LogDebug($"Error: {e.Data}");
-                    errorCallback?.Invoke(e.Data);
-                }
-            };
-
-            try
-            {
-                var processStarted = process.Start();
-                if (!processStarted)
-                {
-                    LogDebug($"Failed to start process: {command}");
-                    throw new GhostException(
-                        $"Failed to start process '{command}'",
-                        ErrorCode.ProcessError);
-                }
-
-                process.BeginOutputReadLine();
-                process.BeginErrorReadLine();
-
-                // Register cancellation
-                cancellationToken.Register(() =>
-                {
-                    try
-                    {
-                        if (!process.HasExited)
-                        {
-                            LogDebug("Cancellation requested - killing process");
-                            process.Kill(entireProcessTree: true);
-                        }
-                    }
-                    catch
-                    {
-                        LogDebug("Failed to kill process during cancellation");
-                    }
-                });
-
-                await process.WaitForExitAsync(cancellationToken);
-
-                var result = new ProcessResult
-                {
-                    ExitCode = process.ExitCode,
-                    StandardOutput = output.ToString().TrimEnd(),
-                    StandardError = error.ToString().TrimEnd()
-                };
-
-                LogDebug($"Async process exited with code: {result.ExitCode}");
-                return result;
+                _logger.Log("ProcessRunner", message);
+                AnsiConsole.MarkupLine($"[grey]DEBUG: {message.EscapeMarkup()}[/]");
             }
-            catch (OperationCanceledException)
-            {
-                LogDebug("Process was cancelled");
-                throw;
-            }
-            catch (Exception ex)
-            {
-                LogDebug($"Async process execution failed: {ex.Message}");
-                throw new GhostException(
-                    $"Failed to execute command '{command}': {ex.Message}",
-                    ErrorCode.ProcessError);
-            }
-        }
-
-        // Run a process with passthrough to console (for interactive processes)
-        public async Task<int> RunWithArgsAsync(
-            string command,
-            string[] appArgs,
-            string[] passthroughArgs,
-            string workDir)
-        {
-            var allArgs = new List<string>(appArgs);
-            if (passthroughArgs?.Length > 0)
-            {
-                allArgs.Add("--");
-                allArgs.AddRange(passthroughArgs);
-            }
-
-            var fullCommand = $"{command} {string.Join(" ", allArgs)}";
-            LogDebug($"Executing interactive command: {fullCommand}");
-            LogDebug($"Working directory: {workDir}");
-
-            var startInfo = new ProcessStartInfo
-            {
-                FileName = command,
-                Arguments = string.Join(" ", allArgs),
-                RedirectStandardOutput = false, // Let output go directly to console
-                RedirectStandardError = false,  // Let error go directly to console
-                RedirectStandardInput = false,  // Allow interactive input
-                UseShellExecute = false,
-                CreateNoWindow = true,
-                WorkingDirectory = workDir
-            };
-
-            // Set environment variables
-            var envVars = GetInheritedEnvironmentVariables();
-            foreach (var variable in envVars)
-            {
-                startInfo.Environment[variable.Key] = variable.Value;
-                LogDebug($"Setting environment variable: {variable.Key}={variable.Value}");
-            }
-
-            try
-            {
-                using var process = new Process { StartInfo = startInfo };
-                process.Start();
-
-                LogDebug("Interactive process started");
-                await process.WaitForExitAsync();
-
-                var exitCode = process.ExitCode;
-                LogDebug($"Interactive process exited with code: {exitCode}");
-
-                return exitCode;
-            }
-            catch (Exception ex)
-            {
-                LogDebug($"Interactive process execution failed: {ex.Message}");
-                throw new GhostException(
-                    $"Failed to execute command '{command}': {ex.Message}",
-                    ErrorCode.ProcessError);
-            }
-        }
-
-        // Helper to get important environment variables to pass through
-        private Dictionary<string, string> GetInheritedEnvironmentVariables()
-        {
-            var variables = new Dictionary<string, string>();
-            var inheritedVars = new[]
-            {
-                "PATH",
-                "DOTNET_ROOT",
-                "DOTNET_MULTILEVEL_LOOKUP",
-                "ASPNETCORE_ENVIRONMENT",
-                "DOTNET_CLI_TELEMETRY_OPTOUT",
-                // Add other variables as needed
-            };
-
-            foreach (var name in inheritedVars)
-            {
-                var value = Environment.GetEnvironmentVariable(name);
-                if (!string.IsNullOrEmpty(value))
-                {
-                    variables[name] = value;
-                }
-            }
-
-            return variables;
         }
     }
 
@@ -405,7 +232,6 @@ namespace Ghost.Infrastructure
         public int ExitCode { get; init; }
         public string StandardOutput { get; init; }
         public string StandardError { get; init; }
-
         public bool Success => ExitCode == 0;
 
         public void EnsureSuccessfulExit()

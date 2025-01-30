@@ -1,6 +1,8 @@
 // Program.cs
 using Ghost.Commands;
 using Ghost.Infrastructure;
+using Ghost.Infrastructure.Database;
+using Ghost.Infrastructure.Monitoring;
 using Ghost.Services;
 using Microsoft.Extensions.DependencyInjection;
 using Spectre.Console.Cli;
@@ -19,6 +21,7 @@ public static class Program
         services.AddSingleton<GhostLogger>();
         services.AddSingleton<ProcessRunner>();
         services.AddSingleton<GithubService>();
+        services.AddSingleton<MonitorSystem>();
 
         // Register application services
         services.AddSingleton<ProjectGenerator>();
@@ -29,6 +32,8 @@ public static class Program
         services.AddSingleton<CreateCommand>();
         services.AddSingleton<AliasCommand>();
         services.AddSingleton<PushCommand>();
+        services.AddSingleton<MonitorCommand>();
+        services.AddGhostPersistence("ghost-father");
 
         // Create registrar for Spectre.Console
         var registrar = new TypeRegistrar(services);

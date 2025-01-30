@@ -1,6 +1,6 @@
 namespace Ghost.Services;
 
-public class ProjectTemplate
+public partial class ProjectTemplate
 {
     public Dictionary<string, string> Files { get; } = new();
 

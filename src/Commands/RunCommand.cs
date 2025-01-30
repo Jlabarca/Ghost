@@ -78,7 +78,7 @@ namespace Ghost.Commands
                 var processRunner = new ProcessRunner(_logger, settings.Debug);
 
                 // Create a new AppRunner with the debug-enabled ProcessRunner
-                var appRunner = new AppRunner(processRunner);
+                var appRunner = new AppRunner(processRunner, _logger, _configManager, settings.Debug);
 
                 return await appRunner.RunAsync(url, settings.Args ?? Array.Empty<string>(), instanceId);
             }

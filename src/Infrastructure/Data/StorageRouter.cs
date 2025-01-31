@@ -1,4 +1,5 @@
 using Ghost.Infrastructure.Storage;
+using Ghost.Infrastructure.Storage.Database;
 namespace Ghost.Infrastructure.Data;
 
 public interface IStorageRouter : IAsyncDisposable
@@ -19,12 +20,12 @@ public enum StorageType
 public class StorageRouter : IStorageRouter
 {
     private readonly IRedisClient _cache;
-    private readonly IPostgresClient _db;
+    private readonly IDatabaseClient _db;
     private readonly IPermissionsManager _permissions;
 
     public StorageRouter(
         IRedisClient cache,
-        IPostgresClient db,
+        IDatabaseClient db,
         IPermissionsManager permissions)
     {
         _cache = cache;

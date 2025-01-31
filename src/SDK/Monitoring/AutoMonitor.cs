@@ -1,111 +1,79 @@
-using Ghost.Infrastructure.Data;
-using Ghost.Infrastructure.Orchestration;
+using System.Collections.Concurrent;
 using System.Diagnostics;
 using Ghost.Infrastructure.Monitoring;
+using Ghost.Infrastructure.Orchestration;
 
 namespace Ghost.SDK.Monitoring;
 
-/// <summary>
-/// Interface for automatic process monitoring
-/// Think of this as a "health monitoring system" that keeps track of vital signs
-/// </summary>
-public interface IAutoMonitor
-{
-    Task StartAsync(TimeSpan interval);
-    Task StopAsync();
-    event EventHandler<ProcessMetricsEventArgs> MetricsCollected;
-}
-
-public class ProcessMetricsEventArgs : EventArgs
-{
-    public ProcessMetrics Metrics { get; }
-    public DateTime Timestamp { get; }
-
-    public ProcessMetricsEventArgs(ProcessMetrics metrics, DateTime timestamp)
-    {
-        Metrics = metrics;
-        Timestamp = timestamp;
-    }
-}
-
-/// <summary>
-/// Implementation of automatic process monitoring
-/// This is like having "sensors" throughout the building that continuously monitor various metrics
-/// </summary>
 public class AutoMonitor : IAutoMonitor
 {
-    private readonly IRedisManager _redisManager;
-    private readonly IDataAPI _dataApi;
-    private readonly string _processId;
-    private readonly CancellationTokenSource _cts;
-    private Task _monitoringTask;
     private readonly Process _currentProcess;
+    private readonly CancellationTokenSource _cts;
+    private readonly string _processId;
+    private readonly IRedisManager _redisManager;
+    private readonly TimeSpan _defaultInterval = TimeSpan.FromSeconds(5);
+    private readonly ConcurrentDictionary<string, ProcessMetrics> _lastMetrics = new();
+
+    private Task _monitoringTask;
+    private DateTime _lastMeasurement;
+    private TimeSpan _lastProcessorTime;
+    private long _lastNetworkIn;
+    private long _lastNetworkOut;
+    private long _lastDiskRead;
+    private long _lastDiskWrite;
 
     public event EventHandler<ProcessMetricsEventArgs> MetricsCollected;
 
-    public AutoMonitor(
-        IRedisManager redisManager,
-        IDataAPI dataApi)
+    public AutoMonitor(IRedisManager redisManager, string processId = null)
     {
         _redisManager = redisManager;
-        _dataApi = dataApi;
-        _processId = Guid.NewGuid().ToString();
-        _cts = new CancellationTokenSource();
         _currentProcess = Process.GetCurrentProcess();
+        _processId = processId ?? _currentProcess.Id.ToString();
+        _cts = new CancellationTokenSource();
+
+        // Initialize measurement baselines
+        _lastMeasurement = DateTime.UtcNow;
+        _lastProcessorTime = _currentProcess.TotalProcessorTime;
+        _lastNetworkIn = 0;
+        _lastNetworkOut = 0;
+        // _lastDiskRead = _currentProcess.ReadOperationCount;
+        // _lastDiskWrite = _currentProcess.WriteOperationCount;
     }
 
-    public async Task StartAsync(TimeSpan interval)
+    public async Task StartAsync(TimeSpan? interval = null)
     {
         if (_monitoringTask != null)
+        {
             throw new InvalidOperationException("Monitoring is already started");
+        }
 
-        _monitoringTask = MonitorProcessAsync(interval);
+        _monitoringTask = MonitorProcessAsync(interval ?? _defaultInterval);
     }
 
     public async Task StopAsync()
     {
-        if (_monitoringTask == null)
-            return;
+        if (_monitoringTask == null) return;
 
         _cts.Cancel();
         await _monitoringTask;
         _monitoringTask = null;
     }
 
+    public async Task<ProcessMetrics> GetCurrentMetricsAsync()
+    {
+        return await Task.Run(() => CollectMetrics());
+    }
+
     private async Task MonitorProcessAsync(TimeSpan interval)
     {
-        var lastCpuTime = TimeSpan.Zero;
-        var lastMeasurement = DateTime.UtcNow;
-
         while (!_cts.Token.IsCancellationRequested)
         {
             try
             {
-                // Calculate CPU usage since last measurement
-                var currentCpuTime = _currentProcess.TotalProcessorTime;
-                var cpuUsage = (currentCpuTime - lastCpuTime).TotalMilliseconds /
-                              (DateTime.UtcNow - lastMeasurement).TotalMilliseconds /
-                              Environment.ProcessorCount * 100;
-
-                lastCpuTime = currentCpuTime;
-                lastMeasurement = DateTime.UtcNow;
-
-                // Collect current metrics
-                var metrics = new ProcessMetrics(
-                    _processId,
-                    cpuUsage,
-                    _currentProcess.WorkingSet64,
-                    _currentProcess.Threads.Count,
-                    DateTime.UtcNow
-                );
-
-                // Store metrics
-                await StoreMetrics(metrics);
-
-                // Raise event
+                var metrics = CollectMetrics();
+                await PublishMetrics(metrics);
                 OnMetricsCollected(metrics);
 
-                // Wait for next interval
                 await Task.Delay(interval, _cts.Token);
             }
             catch (OperationCanceledException)
@@ -121,51 +89,80 @@ public class AutoMonitor : IAutoMonitor
         }
     }
 
-    private async Task StoreMetrics(ProcessMetrics metrics)
+    private ProcessMetrics CollectMetrics()
     {
-        // Store in Redis for real-time access
-        await _redisManager.PublishMetricsAsync(metrics);
+        var now = DateTime.UtcNow;
+        var currentProcessorTime = _currentProcess.TotalProcessorTime;
+        var currentDiskRead = 0;//_currentProcess.ReadOperationCount;
+        var currentDiskWrite = 0;//_currentProcess.WriteOperationCount;
 
-        // Store in persistent storage for historical analysis
-        var key = $"metrics:{_processId}:history:{DateTime.UtcNow:yyyyMMddHH}";
-        await _dataApi.SetDataAsync(key, metrics);
+        // Calculate rates
+        var timeElapsed = (now - _lastMeasurement).TotalSeconds;
+        var cpuTimeElapsed = (currentProcessorTime - _lastProcessorTime).TotalMilliseconds;
+
+        var cpuUsage = (cpuTimeElapsed / (timeElapsed * 1000 * Environment.ProcessorCount)) * 100;
+        var diskReadRate = (currentDiskRead - _lastDiskRead) / timeElapsed;
+        var diskWriteRate = (currentDiskWrite - _lastDiskWrite) / timeElapsed;
+
+        // Update last measurements
+        _lastMeasurement = now;
+        _lastProcessorTime = currentProcessorTime;
+        _lastDiskRead = currentDiskRead;
+        _lastDiskWrite = currentDiskWrite;
+
+        var metrics = new ProcessMetrics(
+            processId: _processId,
+            cpuPercentage: Math.Round(cpuUsage, 2),
+            memoryBytes: _currentProcess.WorkingSet64,
+            threadCount: _currentProcess.Threads.Count,
+            timestamp: now,
+            diskReadBytes: (long)diskReadRate,
+            diskWriteBytes: (long)diskWriteRate,
+            handleCount: _currentProcess.HandleCount,
+            gcTotalMemory: GC.GetTotalMemory(false),
+            gen0Collections: GC.CollectionCount(0),
+            gen1Collections: GC.CollectionCount(1),
+            gen2Collections: GC.CollectionCount(2)
+        );
+
+        _lastMetrics.AddOrUpdate(_processId, metrics, (_, _) => metrics);
+        return metrics;
+    }
+
+    private async Task PublishMetrics(ProcessMetrics metrics)
+    {
+        await _redisManager.PublishMetricsAsync(metrics);
     }
 
     protected virtual void OnMetricsCollected(ProcessMetrics metrics)
     {
-        MetricsCollected?.Invoke(this, new ProcessMetricsEventArgs(
-            metrics,
-            DateTime.UtcNow
-        ));
+        MetricsCollected?.Invoke(this, new ProcessMetricsEventArgs(metrics, DateTime.UtcNow));
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        await StopAsync();
+        _cts.Dispose();
+        _lastMetrics.Clear();
     }
 }
 
-/// <summary>
-/// Extension methods for metrics analysis
-/// These are like the "analysis tools" that help make sense of the raw sensor data
-/// </summary>
-public static class MetricsAnalysisExtensions
+public interface IAutoMonitor : IAsyncDisposable
 {
-    public static double GetAverageCpuUsage(this IEnumerable<ProcessMetrics> metrics)
-        => metrics.Average(m => m.CpuPercentage);
+    Task StartAsync(TimeSpan? interval = null);
+    Task StopAsync();
+    Task<ProcessMetrics> GetCurrentMetricsAsync();
+    event EventHandler<ProcessMetricsEventArgs> MetricsCollected;
+}
 
-    public static long GetPeakMemoryUsage(this IEnumerable<ProcessMetrics> metrics)
-        => metrics.Max(m => m.MemoryBytes);
+public class ProcessMetricsEventArgs : EventArgs
+{
+    public ProcessMetrics Metrics { get; }
+    public DateTime Timestamp { get; }
 
-    public static double GetAverageThreadCount(this IEnumerable<ProcessMetrics> metrics)
-        => metrics.Average(m => m.ThreadCount);
-
-    public static ProcessMetricsSummary GetSummary(this IEnumerable<ProcessMetrics> metrics)
+    public ProcessMetricsEventArgs(ProcessMetrics metrics, DateTime timestamp)
     {
-        var orderedMetrics = metrics.OrderBy(m => m.Timestamp).ToList();
-        return new ProcessMetricsSummary
-        {
-            StartTime = orderedMetrics.First().Timestamp,
-            EndTime = orderedMetrics.Last().Timestamp,
-            AverageCpu = GetAverageCpuUsage(orderedMetrics),
-            PeakMemory = GetPeakMemoryUsage(orderedMetrics),
-            AverageThreads = GetAverageThreadCount(orderedMetrics),
-            SampleCount = orderedMetrics.Count
-        };
+        Metrics = metrics;
+        Timestamp = timestamp;
     }
 }

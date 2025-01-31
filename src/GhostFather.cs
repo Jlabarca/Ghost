@@ -1,3 +1,4 @@
+using Ghost.Infrastructure.Data;
 using Ghost.Infrastructure.Monitoring;
 using Ghost.Infrastructure.Orchestration;
 using Ghost.Infrastructure.Orchestration.Channels;
@@ -13,11 +14,12 @@ public class GhostFather : IAsyncDisposable
     private readonly CancellationTokenSource _cts;
     private readonly Dictionary<string, ProcessInfo> _processes;
     private readonly SemaphoreSlim _processSemaphore;
+    private readonly DataAPI _data;
 
-    public GhostFather(
-        IRedisManager redisManager,
-        IConfigManager configManager)
+    public GhostFather(IRedisManager redisManager,
+            IConfigManager configManager, DataAPI dataApi)
     {
+        _data = dataApi;
         _redisManager = redisManager;
         _configManager = configManager;
         _channels = new SystemChannels(redisManager);

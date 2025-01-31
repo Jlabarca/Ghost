@@ -1,30 +1,22 @@
-using Npgsql;
-using Dapper;
+using Microsoft.Data.Sqlite;
 using System.Data;
+using Dapper;
 
-namespace Ghost.Infrastructure.Storage;
+namespace Ghost.Infrastructure.Storage.Database;
 
-public interface IPostgresClient : IAsyncDisposable
-{
-    Task<T> QuerySingleAsync<T>(string sql, object param = null);
-    Task<IEnumerable<T>> QueryAsync<T>(string sql, object param = null);
-    Task<int> ExecuteAsync(string sql, object param = null);
-    Task<NpgsqlTransaction> BeginTransactionAsync();
-}
-
-public class PostgresClient : IPostgresClient
+public class SQLiteClient : IDatabaseClient
 {
     private readonly string _connectionString;
-    private NpgsqlConnection _connection;
-    private readonly SemaphoreSlim _semaphore;
+    private SqliteConnection _connection;
+    private readonly SemaphoreSlim _semaphore = new(1, 1);
+    private bool _disposed;
 
-    public PostgresClient(string connectionString)
+    public SQLiteClient(string connectionString)
     {
         _connectionString = connectionString;
-        _semaphore = new SemaphoreSlim(1, 1);
     }
 
-    private async Task EnsureConnectionAsync()
+    private async Task<SqliteConnection> GetConnectionAsync()
     {
         await _semaphore.WaitAsync();
         try
@@ -35,9 +27,10 @@ public class PostgresClient : IPostgresClient
                 {
                     await _connection.DisposeAsync();
                 }
-                _connection = new NpgsqlConnection(_connectionString);
+                _connection = new SqliteConnection(_connectionString);
                 await _connection.OpenAsync();
             }
+            return _connection;
         }
         finally
         {
@@ -47,15 +40,17 @@ public class PostgresClient : IPostgresClient
 
     public async Task<T> QuerySingleAsync<T>(string sql, object param = null)
     {
+        if (_disposed) throw new ObjectDisposedException(nameof(SQLiteClient));
+
         try
         {
-            await EnsureConnectionAsync();
-            return await _connection.QuerySingleAsync<T>(sql, param);
+            var connection = await GetConnectionAsync();
+            return await connection.QuerySingleAsync<T>(sql, param);
         }
         catch (Exception ex)
         {
             throw new GhostException(
-                "Failed to execute single query", 
+                "Failed to execute single query",
                 ex,
                 ErrorCode.StorageOperationFailed);
         }
@@ -63,15 +58,17 @@ public class PostgresClient : IPostgresClient
 
     public async Task<IEnumerable<T>> QueryAsync<T>(string sql, object param = null)
     {
+        if (_disposed) throw new ObjectDisposedException(nameof(SQLiteClient));
+
         try
         {
-            await EnsureConnectionAsync();
-            return await _connection.QueryAsync<T>(sql, param);
+            var connection = await GetConnectionAsync();
+            return await connection.QueryAsync<T>(sql, param);
         }
         catch (Exception ex)
         {
             throw new GhostException(
-                "Failed to execute query", 
+                "Failed to execute query",
                 ex,
                 ErrorCode.StorageOperationFailed);
         }
@@ -79,31 +76,36 @@ public class PostgresClient : IPostgresClient
 
     public async Task<int> ExecuteAsync(string sql, object param = null)
     {
+        if (_disposed) throw new ObjectDisposedException(nameof(SQLiteClient));
+
         try
         {
-            await EnsureConnectionAsync();
-            return await _connection.ExecuteAsync(sql, param);
+            var connection = await GetConnectionAsync();
+            return await connection.ExecuteAsync(sql, param);
         }
         catch (Exception ex)
         {
             throw new GhostException(
-                "Failed to execute command", 
+                "Failed to execute command",
                 ex,
                 ErrorCode.StorageOperationFailed);
         }
     }
 
-    public async Task<NpgsqlTransaction> BeginTransactionAsync()
+    public async Task<IGhostTransaction> BeginTransactionAsync()
     {
+        if (_disposed) throw new ObjectDisposedException(nameof(SQLiteClient));
+
         try
         {
-            await EnsureConnectionAsync();
-            return await _connection.BeginTransactionAsync();
+            var connection = await GetConnectionAsync();
+            var transaction = await connection.BeginTransactionAsync();
+            return new SQLiteTransactionWrapper(transaction as SqliteTransaction);
         }
         catch (Exception ex)
         {
             throw new GhostException(
-                "Failed to begin transaction", 
+                "Failed to begin transaction",
                 ex,
                 ErrorCode.StorageOperationFailed);
         }
@@ -111,12 +113,17 @@ public class PostgresClient : IPostgresClient
 
     public async ValueTask DisposeAsync()
     {
+        if (_disposed) return;
+
         await _semaphore.WaitAsync();
         try
         {
+            _disposed = true;
+
             if (_connection != null)
             {
                 await _connection.DisposeAsync();
+                _connection = null;
             }
         }
         finally

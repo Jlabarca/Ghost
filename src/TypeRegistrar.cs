@@ -1,22 +1,20 @@
-using Ghost;
-using Ghost.Legacy.Infrastructure;
 using Microsoft.Extensions.DependencyInjection;
 using Spectre.Console.Cli;
+
+namespace Ghost;
 
 public class TypeRegistrar : ITypeRegistrar
 {
   private readonly IServiceCollection _services;
-  private readonly GhostLogger _logger;
 
-  public TypeRegistrar(IServiceCollection services, GhostLogger logger)
+  public TypeRegistrar(IServiceCollection services)
   {
     _services = services;
-    _logger = logger;
   }
 
   public ITypeResolver Build()
   {
-    return new TypeResolver(_services.BuildServiceProvider(), _logger);
+    return new TypeResolver(_services.BuildServiceProvider());
   }
 
   public void Register(Type service, Type implementation)

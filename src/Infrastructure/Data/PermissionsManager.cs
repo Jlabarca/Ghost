@@ -1,4 +1,5 @@
 using Ghost.Infrastructure.Storage;
+using Ghost.Infrastructure.Storage.Database;
 namespace Ghost.Infrastructure.Data;
 
 public interface IPermissionsManager
@@ -23,11 +24,11 @@ public enum Permission
 
 public class PermissionsManager : IPermissionsManager
 {
-    private readonly IPostgresClient _db;
+    private readonly IDatabaseClient _db;
     private readonly IRedisClient _cache;
     private readonly TimeSpan _cacheExpiry = TimeSpan.FromMinutes(5);
 
-    public PermissionsManager(IPostgresClient db, IRedisClient cache)
+    public PermissionsManager(IDatabaseClient db, IRedisClient cache)
     {
         _db = db;
         _cache = cache;

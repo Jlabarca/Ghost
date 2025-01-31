@@ -2,27 +2,47 @@ namespace Ghost.Infrastructure;
 
 public enum ErrorCode
 {
-  RepositoryNotFound,
-  BuildFailed,
-  AliasError,
-  AliasConflict,
-  ProcessError,
-  DirectoryNotFound,
-  TokenNotFound,
-  GithubError,
-  GitConfigMissing,
+    // Storage related
+    StorageConnectionFailed,
+    StorageOperationFailed,
+    CacheMiss,
+    
+    // Permission related
+    UnauthorizedAccess,
+    InsufficientPermissions,
+    
+    // Process related
+    ProcessStartFailed,
+    ProcessTerminated,
+    
+    // Configuration related
+    ConfigurationError,
+    ValidationError,
+    
+    // General
+    Unknown,
+    NotImplemented,
+    InvalidOperation,
+    ProcessError
 }
 
 public class GhostException : Exception
 {
-  public ErrorCode Code { get; }
-  public string UserMessage { get; }
+    public ErrorCode Code { get; }
+    public string Details { get; }
+    public Dictionary<string, string> Context { get; }
 
-  public GhostException(string userMessage, ErrorCode code = ErrorCode.ProcessError)
-      : base(userMessage)
-  {
-    Code = code;
-    UserMessage = userMessage;
-  }
+    public GhostException(string message, ErrorCode code = ErrorCode.Unknown, string details = null, Dictionary<string, string> context = null) 
+        : base(message)
+    {
+        Code = code;
+        Details = details;
+        Context = context ?? new Dictionary<string, string>();
+    }
+
+    public GhostException(string message, Exception innerException, ErrorCode code = ErrorCode.Unknown) 
+        : base(message, innerException)
+    {
+        Code = code;
+    }
 }
-

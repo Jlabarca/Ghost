@@ -1,19 +1,13 @@
-using System.Diagnostics;
-using Dapper;
+using Ghost.Infrastructure;
+using Ghost.Infrastructure.Monitoring;
+using Ghost.Legacy.Infrastructure;
+using Ghost.Legacy.Infrastructure.Monitoring;
 using Spectre.Console;
 using Spectre.Console.Cli;
 using System.ComponentModel;
 
-namespace Ghost.Infrastructure.Monitoring;
-
 // Core monitoring models - think of these as our sensor readings
-public record ProcessMetrics(
-    double CpuPercentage,
-    long MemoryBytes,
-    long ThreadCount,
-    long HandleCount,
-    DateTime CollectedAt
-);
+namespace Ghost.Infrastructure.Monitoring;
 
 public record ProcessStatus(
     string Id,
@@ -27,9 +21,6 @@ public record ProcessStatus(
     int RestartCount
 );
 
-// Monitor System - like the control room's main computer
-
-// Monitor Command - like the control room's display panel
 public class MonitorCommand : Command<MonitorCommand.Settings>
 {
     private readonly MonitorSystem _monitor;
@@ -168,7 +159,7 @@ public class MonitorCommand : Command<MonitorCommand.Settings>
         string[] sizes = { "B", "KB", "MB", "GB" };
         int order = 0;
         double len = bytes;
-        
+
         while (len >= 1024 && order < sizes.Length - 1)
         {
             order++;

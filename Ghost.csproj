@@ -4,13 +4,30 @@
     <TargetFramework>net8.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
+
+    <!-- Tool specific properties -->
+    <PackAsTool>true</PackAsTool>
+    <ToolCommandName>ghost</ToolCommandName>
+    <PackageId>GhostFather</PackageId>
+    <Version>0.0.1</Version>
+    <Authors>Julio Labarca</Authors>
+    <Description>.NET CLI application manager with full CI/CD setup</Description>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <PackageProjectUrl>https://github.com/jlabarca/ghost</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/jlabarca/ghost</RepositoryUrl>
+    <PackageTags>cli;dotnet-tool</PackageTags>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
   </PropertyGroup>
+
   <ItemGroup>
     <PackageReference Include="Dapper" Version="2.1.35" />
     <PackageReference Include="Microsoft.Data.Sqlite" Version="9.0.1" />
     <PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="9.0.1" />
     <PackageReference Include="NLua" Version="1.7.4" />
+    <PackageReference Include="Npgsql" Version="9.0.2" />
     <PackageReference Include="Spectre.Console" Version="0.49.1" />
     <PackageReference Include="Spectre.Console.Cli" Version="0.49.1" />
+    <None Include="README.md" Pack="true" PackagePath="\"/>
+    <PackageReference Include="StackExchange.Redis" Version="2.8.24" />
   </ItemGroup>
 </Project>

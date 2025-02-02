@@ -1,6 +1,7 @@
 using Ghost.Infrastructure;
 using Ghost.Infrastructure.Data;
 using Ghost.Infrastructure.Orchestration;
+using Ghost.Infrastructure.Templates;
 using Spectre.Console;
 using Spectre.Console.Cli;
 using System.ComponentModel;
@@ -11,108 +12,118 @@ public class CreateCommand : AsyncCommand<CreateCommand.Settings>
 {
     private readonly IConfigManager _configManager;
     private readonly IDataAPI _dataApi;
+    private readonly ProjectGenerator _generator;
+    private readonly TemplateEngine _templateEngine;
 
     public class Settings : CommandSettings
     {
         [CommandArgument(0, "<Name>")]
-        [Description("The name of the project to create")]
+        [Description("Name of the application")]
         public string Name { get; set; }
 
         [CommandOption("--template")]
-        [Description("Template to use (default, web, console, worker)")]
+        [Description("Template to use")]
         public string Template { get; set; } = "default";
 
         [CommandOption("--output")]
-        [Description("Output directory (defaults to current directory)")]
+        [Description("Output directory")]
         public string OutputDir { get; set; }
-
-        [CommandOption("--package-name")]
-        [Description("NuGet package name (defaults to project name)")]
-        public string PackageName { get; set; }
 
         [CommandOption("--description")]
         [Description("Project description")]
         public string Description { get; set; }
-
-        [CommandOption("--author")]
-        [Description("Project author")]
-        public string Author { get; set; }
 
         [CommandOption("--no-git")]
         [Description("Skip Git initialization")]
         public bool SkipGit { get; set; }
     }
 
-    public CreateCommand(IConfigManager configManager, IDataAPI dataApi)
+    public CreateCommand(
+        IConfigManager configManager,
+        IDataAPI dataApi,
+        ProjectGenerator generator,
+        TemplateEngine templateEngine)
     {
         _configManager = configManager;
         _dataApi = dataApi;
+        _generator = generator;
+        _templateEngine = templateEngine;
     }
 
     public override async Task<int> ExecuteAsync(CommandContext context, Settings settings)
     {
         try
         {
-            // Validate project name
-            if (!IsValidProjectName(settings.Name))
+            // Show available templates if none specified
+            if (string.IsNullOrEmpty(settings.Template))
             {
-                AnsiConsole.MarkupLine("[red]Error:[/] Invalid project name. Use only letters, numbers, and underscores");
-                return 1;
+                ShowAvailableTemplates();
+                return 0;
             }
 
-            // Resolve output directory
             var outputDir = GetOutputDirectory(settings);
             if (Directory.Exists(outputDir))
             {
-                AnsiConsole.MarkupLine($"[red]Error:[/] Directory already exists: {outputDir}");
-                return 1;
+                throw new GhostException($"Directory already exists: {outputDir}");
             }
 
-            // Load template
-            var template = await LoadTemplate(settings.Template);
-            if (template == null)
-            {
-                AnsiConsole.MarkupLine($"[red]Error:[/] Template not found: {settings.Template}");
-                return 1;
-            }
+            // Start project creation
+            AnsiConsole.WriteLine();
+            AnsiConsole.Write(new Rule($"[yellow]Creating {settings.Name}[/]")
+                .RuleStyle("grey"));
+            AnsiConsole.WriteLine();
 
-            // Show project creation progress
-            await AnsiConsole.Progress()
-                .StartAsync(async ctx =>
+            string projectPath = null;
+            await AnsiConsole.Status()
+                .StartAsync("Creating project...", async ctx =>
                 {
-                    var progressTasks = SetupProgressTasks(ctx);
+                    ctx.Status = "Loading template...";
+                    var template = await _templateEngine.LoadTemplateAsync(settings.Template);
 
-                    // Create project directory
-                    progressTasks["structure"].StartTask();
-                    Directory.CreateDirectory(outputDir);
-                    progressTasks["structure"].Increment(50);
+                    // Prepare variables
+                    var variables = new Dictionary<string, object>
+                    {
+                        ["description"] = settings.Description ?? template.Variables["defaultDescription"],
+                        ["author"] = await _configManager.GetConfigAsync<string>("user.name") ?? "Ghost User"
+                    };
 
-                    // Generate project files
-                    progressTasks["files"].StartTask();
-                    await GenerateProjectFiles(settings, template, outputDir);
-                    progressTasks["files"].Increment(100);
+                    // Generate project
+                    ctx.Status = "Generating project files...";
+                    projectPath = await _generator.GenerateProjectAsync(
+                        settings.Template,
+                        settings.Name,
+                        outputDir,
+                        variables);
 
-                    // Initialize Git repository
+                    // Initialize Git
                     if (!settings.SkipGit)
                     {
-                        progressTasks["git"].StartTask();
-                        await InitializeGitRepository(outputDir);
-                        progressTasks["git"].Increment(100);
+                        ctx.Status = "Initializing Git repository...";
+                        await InitializeGitRepositoryAsync(projectPath);
                     }
 
                     // Save project metadata
-                    progressTasks["metadata"].StartTask();
-                    await SaveProjectMetadata(settings, outputDir);
-                    progressTasks["metadata"].Increment(100);
-
-                    progressTasks["structure"].Increment(50);
+                    ctx.Status = "Saving project metadata...";
+                    await SaveProjectMetadataAsync(settings, projectPath, template);
                 });
 
             // Show project structure
-            await ShowProjectStructure(outputDir);
+            await ShowProjectStructure(projectPath);
 
             // Show success message
-            ShowSuccessMessage(settings, outputDir);
+            AnsiConsole.WriteLine();
+            AnsiConsole.Write(new Panel(
+                Align.Left(new Markup($@"
+Project created successfully!
+
+To get started:
+[grey]cd[/] {settings.Name}
+[grey]dotnet run[/]
+
+For more information, see the README.md file.
+")))
+                .Header("[green]Success![/]")
+                .BorderColor(Color.Green));
 
             return 0;
         }
@@ -123,10 +134,37 @@ public class CreateCommand : AsyncCommand<CreateCommand.Settings>
         }
     }
 
-    private bool IsValidProjectName(string name)
+    private void ShowAvailableTemplates()
     {
-        return !string.IsNullOrEmpty(name) &&
-               System.Text.RegularExpressions.Regex.IsMatch(name, "^[a-zA-Z0-9_]+$");
+        var templates = _templateEngine.GetAvailableTemplates().ToList();
+
+        var table = new Table()
+            .AddColumn("Name")
+            .AddColumn("Description")
+            .AddColumn("Version")
+            .AddColumn("Author")
+            .AddColumn("Tags");
+
+        foreach (var template in templates)
+        {
+            var tags = template.Tags != null
+                ? string.Join(", ", template.Tags)
+                : "";
+            table.AddRow(
+                $"[blue]{template.Name}[/]",
+                template.Description ?? "",
+                template.Version ?? "1.0.0",
+                template.Author ?? "Unknown",
+                tags);
+        }
+
+        AnsiConsole.WriteLine();
+        AnsiConsole.Write(new Panel(table)
+            .Header("Available Templates")
+            .BorderColor(Color.Blue));
+        AnsiConsole.WriteLine();
+        AnsiConsole.MarkupLine("Use [grey]ghost create <name> --template <template>[/] to create a project");
+        AnsiConsole.WriteLine();
     }
 
     private string GetOutputDirectory(Settings settings)
@@ -138,86 +176,17 @@ public class CreateCommand : AsyncCommand<CreateCommand.Settings>
         return Path.Combine(basePath, settings.Name);
     }
 
-    private async Task<ProjectTemplate> LoadTemplate(string templateName)
-    {
-        var template = await _dataApi.GetDataAsync<ProjectTemplate>($"templates:{templateName}");
-        if (template == null)
-        {
-            // Load built-in template
-            template = templateName.ToLower() switch
-            {
-                "default" => CreateDefaultTemplate(),
-                "web" => CreateWebTemplate(),
-                "console" => CreateConsoleTemplate(),
-                "worker" => CreateWorkerTemplate(),
-                _ => null
-            };
-        }
-        return template;
-    }
-
-    private Dictionary<string, ProgressTask> SetupProgressTasks(ProgressContext context)
-    {
-        return new Dictionary<string, ProgressTask>
-        {
-            ["structure"] = context.AddTask("[green]Creating project structure[/]"),
-            ["files"] = context.AddTask("[green]Generating project files[/]"),
-            ["git"] = context.AddTask("[green]Initializing Git repository[/]"),
-            ["metadata"] = context.AddTask("[green]Saving project metadata[/]")
-        };
-    }
-
-    private async Task GenerateProjectFiles(Settings settings, ProjectTemplate template, string outputDir)
-    {
-        foreach (var (path, content) in template.Files)
-        {
-            var fullPath = Path.Combine(outputDir, path);
-            var directory = Path.GetDirectoryName(fullPath);
-
-            if (!string.IsNullOrEmpty(directory))
-            {
-                Directory.CreateDirectory(directory);
-            }
-
-            var processedContent = ProcessTemplateContent(content, settings);
-            await File.WriteAllTextAsync(fullPath, processedContent);
-        }
-    }
-
-    private string ProcessTemplateContent(string content, Settings settings)
-    {
-        var packageName = string.IsNullOrEmpty(settings.PackageName)
-            ? settings.Name
-            : settings.PackageName;
-
-        var description = string.IsNullOrEmpty(settings.Description)
-            ? $"A modern .NET application created with Ghost CLI"
-            : settings.Description;
-
-        var author = string.IsNullOrEmpty(settings.Author)
-            ? Environment.UserName
-            : settings.Author;
-
-        return content
-            .Replace("${ProjectName}", settings.Name)
-            .Replace("${PackageName}", packageName)
-            .Replace("${Description}", description)
-            .Replace("${Author}", author)
-            .Replace("${Year}", DateTime.Now.Year.ToString())
-            .Replace("${Date}", DateTime.Now.ToString("yyyy-MM-dd"));
-    }
-
-    private async Task InitializeGitRepository(string outputDir)
+    private async Task InitializeGitRepositoryAsync(string projectPath)
     {
         try
         {
-            using var process = new System.Diagnostics.Process
+            var process = new System.Diagnostics.Process
             {
                 StartInfo = new System.Diagnostics.ProcessStartInfo
                 {
                     FileName = "git",
                     Arguments = "init",
-                    WorkingDirectory = outputDir,
+                    WorkingDirectory = projectPath,
                     RedirectStandardOutput = true,
                     RedirectStandardError = true,
                     UseShellExecute = false,
@@ -230,94 +199,94 @@ public class CreateCommand : AsyncCommand<CreateCommand.Settings>
 
             if (process.ExitCode != 0)
             {
-                throw new Exception("Git initialization failed");
+                var error = await process.StandardError.ReadToEndAsync();
+                throw new GhostException(
+                    $"Failed to initialize Git repository: {error}",
+                    ErrorCode.GitError);
             }
 
-            // Add .gitignore
-            await File.WriteAllTextAsync(
-                Path.Combine(outputDir, ".gitignore"),
-                GetGitIgnoreContent());
+            // Configure Git if user info is available
+            var userName = await _configManager.GetConfigAsync<string>("user.name");
+            var userEmail = await _configManager.GetConfigAsync<string>("user.email");
+
+            if (!string.IsNullOrEmpty(userName))
+            {
+                await RunGitCommandAsync(
+                    projectPath,
+                    "config",
+                    "user.name",
+                    userName);
+            }
+
+            if (!string.IsNullOrEmpty(userEmail))
+            {
+                await RunGitCommandAsync(
+                    projectPath,
+                    "config",
+                    "user.email",
+                    userEmail);
+            }
+
+            // Add .gitignore if not already created by template
+            var gitignorePath = Path.Combine(projectPath, ".gitignore");
+            if (!File.Exists(gitignorePath))
+            {
+                await File.WriteAllTextAsync(gitignorePath, GetDefaultGitignore());
+            }
+
+            // Initial commit
+            await RunGitCommandAsync(projectPath, "add", ".");
+            await RunGitCommandAsync(
+                projectPath,
+                "commit",
+                "-m",
+                "Initial commit - Created with Ghost CLI");
         }
-        catch (Exception ex)
+        catch (Exception ex) when (ex is not GhostException)
         {
             throw new GhostException(
                 "Failed to initialize Git repository. Is Git installed?",
                 ex,
-                ErrorCode.ProcessError);
+                ErrorCode.GitError);
         }
     }
 
-    private async Task SaveProjectMetadata(Settings settings, string outputDir)
+    private async Task RunGitCommandAsync(string workingDir, params string[] args)
     {
-        var metadata = new ProjectMetadata
+        var process = new System.Diagnostics.Process
         {
-            Name = settings.Name,
-            Template = settings.Template,
-            PackageName = settings.PackageName ?? settings.Name,
-            Description = settings.Description,
-            Author = settings.Author,
-            CreatedAt = DateTime.UtcNow,
-            Path = outputDir
+            StartInfo = new System.Diagnostics.ProcessStartInfo
+            {
+                FileName = "git",
+                Arguments = string.Join(" ", args),
+                WorkingDirectory = workingDir,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                UseShellExecute = false,
+                CreateNoWindow = true
+            }
         };
 
-        await _dataApi.SetDataAsync($"projects:{settings.Name}", metadata);
-    }
+        process.Start();
+        await process.WaitForExitAsync();
 
-    private async Task ShowProjectStructure(string outputDir)
-    {
-        var root = new Tree($"[blue]{Path.GetFileName(outputDir)}/[/]");
-        var files = Directory.GetFiles(outputDir, "*.*", SearchOption.AllDirectories);
-
-        var filesByDirectory = files
-            .OrderBy(f => f)
-            .GroupBy(f => Path.GetDirectoryName(Path.GetRelativePath(outputDir, f)))
-            .OrderBy(g => g.Key);
-
-        foreach (var dirGroup in filesByDirectory)
+        if (process.ExitCode != 0)
         {
-            IHasTreeNodes currentNode = root;
-
-            if (!string.IsNullOrEmpty(dirGroup.Key))
-            {
-                var pathParts = dirGroup.Key.Split(Path.DirectorySeparatorChar);
-                foreach (var part in pathParts)
-                {
-                    currentNode = currentNode.AddNode($"[blue]{part}/[/]");
-                }
-            }
-
-            foreach (var file in dirGroup)
-            {
-                var fileName = Path.GetFileName(file);
-                currentNode.AddNode($"[green]{fileName}[/]");
-            }
+            var error = await process.StandardError.ReadToEndAsync();
+            throw new GhostException(
+                $"Git command failed: {error}",
+                ErrorCode.GitError);
         }
-
-        AnsiConsole.Write(root);
     }
 
-    private void ShowSuccessMessage(Settings settings, string outputDir)
-    {
-        AnsiConsole.WriteLine();
-        AnsiConsole.Write(new Panel(
-            Align.Left(
-                new Markup($@"Project created successfully!
-
-To get started:
-[grey]cd[/] {settings.Name}
-[grey]dotnet run[/]
-
-For more information, see the README.md file.
-")))
-            .Header("[green]Success![/]")
-            .BorderColor(Color.Green));
-    }
-
-    private string GetGitIgnoreContent() => @"
+    private string GetDefaultGitignore() => @"
 ## .NET Core
 bin/
 obj/
 *.user
+
+## VS Code
+.vscode/
 
 ## Visual Studio
 .vs/
@@ -329,129 +298,85 @@ obj/
 ## Rider
 .idea/
 
-## Visual Studio Code
-.vscode/
-
-## User-specific files
-*.suo
-*.user
-*.userosscache
-*.sln.docstates
-
-## Logs
+## Ghost specific
+.ghost/
 *.log
-logs/
 ";
 
-    // Template creation methods
-    private ProjectTemplate CreateDefaultTemplate() => new()
+    private async Task SaveProjectMetadataAsync(
+        Settings settings,
+        string projectPath,
+        GhostTemplate template)
     {
-        Name = "default",
-        Description = "Basic console application template",
-        Files = new Dictionary<string, string>
+        var metadata = new ProjectMetadata
         {
-            ["${ProjectName}.csproj"] = @"
-<Project Sdk=""Microsoft.NET.Sdk"">
-  <PropertyGroup>
-    <OutputType>Exe</OutputType>
-    <TargetFramework>net8.0</TargetFramework>
-    <ImplicitUsings>enable</ImplicitUsings>
-    <Nullable>enable</Nullable>
-    <PackageId>${PackageName}</PackageId>
-    <Version>1.0.0</Version>
-    <Authors>${Author}</Authors>
-    <Description>${Description}</Description>
-  </PropertyGroup>
-  
-  <ItemGroup>
-    <PackageReference Include=""Spectre.Console"" Version=""0.48.0"" />
-  </ItemGroup>
-</Project>",
-            ["Program.cs"] = @"
-using Spectre.Console;
+            Name = settings.Name,
+            Template = template.Name,
+            Version = template.Version,
+            Description = settings.Description ?? template.Variables["defaultDescription"]?.ToString(),
+            CreatedAt = DateTime.UtcNow,
+            Path = projectPath,
+            TemplateInfo = new TemplateInfo
+            {
+                Version = template.Version,
+                Variables = template.Variables
+            }
+        };
 
-namespace ${ProjectName};
-
-public class Program
-{
-    public static async Task Main(string[] args)
-    {
-        AnsiConsole.Write(
-            new FigletText(""${ProjectName}"")
-                .Color(Color.Green));
-                
-        AnsiConsole.MarkupLine(""Welcome to [green]${ProjectName}[/]!"");
+        await _dataApi.SetDataAsync($"projects:{settings.Name}", metadata);
     }
-}",
-            ["README.md"] = @"
-# ${ProjectName}
 
-${Description}
-
-## Getting Started
-
-1. Build the project:
-   ```bash
-   dotnet build
-   ```
-
-2. Run the application:
-   ```bash
-   dotnet run
-   ```
-
-## License
-
-This project is licensed under the MIT License.
-"
-        }
-    };
-
-    private ProjectTemplate CreateWebTemplate() => new()
+    private async Task ShowProjectStructure(string projectPath)
     {
-        Name = "web",
-        Description = "ASP.NET Core web application template",
-        Files = new Dictionary<string, string>
-        {
-            // Add web template files
-        }
-    };
+        var tree = new Tree($"[blue]{Path.GetFileName(projectPath)}[/]");
+        BuildDirectoryTree(tree, projectPath);
+        AnsiConsole.WriteLine();
+        AnsiConsole.Write(tree);
+    }
 
-    private ProjectTemplate CreateConsoleTemplate() => new()
+    private void BuildDirectoryTree(IHasTreeNodes node, string path, int level = 0)
     {
-        Name = "console",
-        Description = "Advanced console application template",
-        Files = new Dictionary<string, string>
-        {
-            // Add console template files
-        }
-    };
+        if (level > 3) return; // Limit depth for readability
 
-    private ProjectTemplate CreateWorkerTemplate() => new()
-    {
-        Name = "worker",
-        Description = "Background worker service template",
-        Files = new Dictionary<string, string>
+        // Add directories
+        foreach (var dir in Directory.GetDirectories(path)
+            .Where(d => !Path.GetFileName(d).StartsWith("."))) // Skip hidden directories
         {
-            // Add worker template files
+            var dirNode = node.AddNode($"[blue]{Path.GetFileName(dir)}[/]");
+            BuildDirectoryTree(dirNode, dir, level + 1);
         }
-    };
-}
 
-public class ProjectTemplate
-{
-    public string Name { get; set; }
-    public string Description { get; set; }
-    public Dictionary<string, string> Files { get; set; } = new();
+        // Add files
+        foreach (var file in Directory.GetFiles(path)
+            .Where(f => !Path.GetFileName(f).StartsWith("."))) // Skip hidden files
+        {
+            var fileName = Path.GetFileName(file);
+            var color = Path.GetExtension(file).ToLower() switch
+            {
+                ".cs" => "green",
+                ".csproj" => "yellow",
+                ".json" => "cyan",
+                ".md" => "purple",
+                _ => "grey"
+            };
+            node.AddNode($"[{color}]{fileName}[/]");
+        }
+    }
 }
 
 public class ProjectMetadata
 {
     public string Name { get; set; }
     public string Template { get; set; }
-    public string PackageName { get; set; }
+    public string Version { get; set; }
     public string Description { get; set; }
-    public string Author { get; set; }
     public DateTime CreatedAt { get; set; }
     public string Path { get; set; }
+    public TemplateInfo TemplateInfo { get; set; }
+}
+
+public class TemplateInfo
+{
+    public string Version { get; set; }
+    public Dictionary<string, object> Variables { get; set; }
 }

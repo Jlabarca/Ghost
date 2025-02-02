@@ -1,4 +1,3 @@
-// src/Commands/StartCommand.cs
 using Dapper;
 using Ghost.Infrastructure;
 using Ghost.Infrastructure.Data;
@@ -14,6 +13,13 @@ namespace Ghost.Commands;
 
 public class StartCommand : AsyncCommand<StartCommand.Settings>
 {
+    private RedisManager _redisManager;
+
+    public StartCommand(RedisManager redisManager)
+    {
+        _redisManager = redisManager;
+    }
+
     public class Settings : CommandSettings
     {
         [CommandOption("--data-dir")]
@@ -27,6 +33,10 @@ public class StartCommand : AsyncCommand<StartCommand.Settings>
         [CommandOption("--no-monitor")]
         [Description("Disable monitoring interface")]
         public bool DisableMonitor { get; set; }
+        
+        [CommandOption("--docker")]
+        [Description("Use Docker containers for Redis and PostgreSQL")]
+        public bool UseDocker { get; set; }
     }
 
     public override async Task<int> ExecuteAsync(CommandContext context, Settings settings)
@@ -52,6 +62,12 @@ public class StartCommand : AsyncCommand<StartCommand.Settings>
                         ["monitor"] = ctx.AddTask("[green]Starting monitoring[/]")
                     };
 
+                    if (settings.UseDocker)
+                    {
+                        tasks["docker"] = ctx.AddTask("[green]Starting Docker containers[/]");
+                        await StartDockerServices(tasks["docker"]);
+                    }
+
                     // Initialize database
                     tasks["db"].StartTask();
                     var dbPath = Path.Combine(dataDir, "ghost.db");
@@ -60,7 +76,7 @@ public class StartCommand : AsyncCommand<StartCommand.Settings>
 
                     // Initialize cache system
                     tasks["cache"].StartTask();
-                    var cache = await InitializeCache(dataDir);
+                    var cache = await InitializeCache(dataDir, settings.UseDocker);
                     tasks["cache"].Increment(100);
 
                     // Setup monitoring if enabled
@@ -93,7 +109,7 @@ public class StartCommand : AsyncCommand<StartCommand.Settings>
 
     private async Task<IDatabaseClient> InitializeDatabase(string dbPath)
     {
-        // Create SQLite database tables
+        // Create SQLite database with tables
         var connectionString = new SqliteConnectionStringBuilder
         {
             DataSource = dbPath,
@@ -127,25 +143,100 @@ public class StartCommand : AsyncCommand<StartCommand.Settings>
                 process_id TEXT NOT NULL,
                 metrics TEXT NOT NULL,
                 timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
-            );");
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_metrics_process_time 
+            ON metrics(process_id, timestamp);
+
+            CREATE INDEX IF NOT EXISTS idx_config_scope 
+            ON config(scope);");
 
         return new SQLiteClient(connectionString);
     }
 
-    private async Task<IRedisClient> InitializeCache(string dataDir)
+    private async Task<IRedisClient> InitializeCache(string dataDir, bool useDocker)
     {
-        // For simplicity, we'll still use Redis but could be replaced
-        // with a lightweight alternative like an in-memory cache + persistent storage
+        // TODO: check GhostOptions for Redis connection string
+        if (useDocker)
+        {
+            try
+            {
+                // TODO: Redis Docker Validation
+                return new RedisClient("localhost:6379");
+            }
+            catch (Exception ex)
+            {
+                AnsiConsole.MarkupLine($"[yellow]Warning:[/] Failed to connect to Redis container: {ex.Message}");
+                AnsiConsole.MarkupLine("[grey]Falling back to local cache...[/]");
+            }
+        }
+
+        // Use local cache implementation
+        return new LocalCacheClient(Path.Combine(dataDir, "cache"));
+    }
+
+    private async Task StartDockerServices(ProgressTask task)
+    {
+        // Check if Docker is available
         try
         {
-            var cache = new RedisClient("localhost");
-            await cache.SetAsync("ghost:status", "running");
-            return cache;
+            var process = new System.Diagnostics.Process
+            {
+                StartInfo = new System.Diagnostics.ProcessStartInfo
+                {
+                    FileName = "docker",
+                    Arguments = "ps",
+                    RedirectStandardOutput = true,
+                    RedirectStandardError = true,
+                    UseShellExecute = false,
+                    CreateNoWindow = true
+                }
+            };
+
+            process.Start();
+            await process.WaitForExitAsync();
+
+            if (process.ExitCode != 0)
+            {
+                throw new GhostException("Docker is not running or not accessible");
+            }
+
+            // Start Redis container
+            await StartDockerContainer("redis", "redis:latest", "6379:6379");
+            task.Increment(50);
+
+            // Wait for Redis to be ready
+            await Task.Delay(2000); // Give containers time to start
+            task.Increment(50);
         }
-        catch
+        catch (Exception ex)
         {
-            // Fallback to local cache implementation
-            return new LocalCacheClient(dataDir);
+            throw new GhostException($"Failed to start Docker services: {ex.Message}", ErrorCode.ProcessError);
+        }
+    }
+
+    private async Task StartDockerContainer(string name, string image, string ports)
+    {
+        // Check if container exists
+        var process = new System.Diagnostics.Process
+        {
+            StartInfo = new System.Diagnostics.ProcessStartInfo
+            {
+                FileName = "docker",
+                Arguments = $"run -d --name ghost-{name} -p {ports} {image}",
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                UseShellExecute = false,
+                CreateNoWindow = true
+            }
+        };
+
+        process.Start();
+        await process.WaitForExitAsync();
+
+        if (process.ExitCode != 0)
+        {
+            throw new GhostException($"Failed to start {name} container");
         }
     }
 
@@ -166,23 +257,24 @@ public class StartCommand : AsyncCommand<StartCommand.Settings>
             new PermissionsManager(db, cache));
 
         var configManager = new ConfigManager(cache, storageRouter);
-        var redisManager = new RedisManager(cache, "ghost-father");
         var dataApi = new DataAPI(storageRouter, cache);
-        var father = new GhostFather(redisManager, configManager, dataApi);
+        var father = new GhostFather(_redisManager, configManager, dataApi);
         return father;
     }
 
     private void ShowSuccessMessage(Settings settings)
     {
+        var details = new List<string>
+        {
+            "[grey]Status:[/] Running",
+            $"[grey]Monitor:[/] {(settings.DisableMonitor ? "Disabled" : $"http://localhost:{settings.Port}")}",
+            $"[grey]Mode:[/] {(settings.UseDocker ? "Docker" : "Local")}",
+            "",
+            "Press Ctrl+C to stop."
+        };
+
         AnsiConsole.Write(new Panel(
-            Align.Left(
-                new Markup($@"Ghost Father is running!
-
-[grey]Status:[/] Running
-[grey]Monitor:[/] {(settings.DisableMonitor ? "Disabled" : $"http://localhost:{settings.Port}")}
-
-Press Ctrl+C to stop.
-")))
+            Align.Left(new Markup(string.Join("\n", details))))
             .Header("[green]Ghost Father[/]")
             .BorderColor(Color.Green));
     }
@@ -203,7 +295,7 @@ Press Ctrl+C to stop.
         catch (OperationCanceledException)
         {
             // Normal shutdown
+            AnsiConsole.MarkupLine("[grey]Shutting down...[/]");
         }
     }
 }
-

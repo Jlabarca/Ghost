@@ -23,7 +23,10 @@ public enum ErrorCode
     Unknown,
     NotImplemented,
     InvalidOperation,
-    ProcessError
+    ProcessError,
+    TemplateError,
+    GitError,
+    TemplateNotFound
 }
 
 public class GhostException : Exception

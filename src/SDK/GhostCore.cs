@@ -25,20 +25,31 @@ public class GhostCore
 
     ConfigureServices();
   }
+  public GhostOptions Options => _options;
 
   private void ConfigureServices()
   {
     // Register core services
     _services.AddSingleton(_options);
+    _services.AddSingleton<IPermissionsManager, PermissionsManager>();
     _services.AddSingleton<ICoreAPI, CoreAPI>();
     _services.AddSingleton<IStateManager, StateManager>();
     _services.AddSingleton<IConfigClient, ConfigClient>();
     _services.AddSingleton<IDataAccess, DataAccess>();
     _services.AddSingleton<IAutoMonitor, AutoMonitor>();
 
-    // Register infrastructure services
-    _services.AddSingleton<IRedisManager>(sp =>
-        new RedisManager(new RedisClient(_options.RedisConnectionString), _options.SystemId));
+
+    //define if redis or not
+    if (_options.UseRedis)
+    {
+      _services.AddSingleton<IRedisClient, RedisClient>();
+    }
+    else
+    {
+      _services.AddSingleton<IRedisClient, LocalCacheClient>();
+    }
+
+    _services.AddSingleton<IRedisManager, RedisManager>();
     _services.AddSingleton<IConfigManager, ConfigManager>();
     _services.AddSingleton<IStorageRouter, StorageRouter>();
     _services.AddSingleton<IDataAPI, DataAPI>();

@@ -22,8 +22,9 @@ public class RedisManager : IRedisManager
     private readonly string _metricsChannel;
     private readonly string _stateChannel;
 
-    public RedisManager(IRedisClient redis, string systemId)
+    public RedisManager(IRedisClient redis)
     {
+        var systemId = "ghost"; //TODO: Get system ID from config or environment
         _redis = redis;
         _commandChannel = $"ghost:{systemId}:commands";
         _metricsChannel = $"ghost:{systemId}:metrics";

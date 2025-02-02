@@ -1,86 +1,123 @@
-using System.Collections.Concurrent;
-using System.Text.Json;
 namespace Ghost.Infrastructure.Storage;
 
-
+// Local cache implementation that persists to disk
 public class LocalCacheClient : IRedisClient
 {
-  private readonly string _dataDir;
-  private readonly ConcurrentDictionary<string, CacheEntry> _cache = new();
-  private readonly Timer _cleanupTimer;
+    private readonly string _cacheDir;
+    private readonly Dictionary<string, object> _memoryCache;
+    private readonly SemaphoreSlim _lock;
 
-  public LocalCacheClient(string dataDir)
-  {
-    _dataDir = dataDir;
-    _cleanupTimer = new Timer(CleanupCallback, null, TimeSpan.FromMinutes(5), TimeSpan.FromMinutes(5));
-    LoadPersistedCache();
-  }
-
-  private void LoadPersistedCache()
-  {
-    var cacheFile = Path.Combine(_dataDir, "cache.json");
-    if (File.Exists(cacheFile))
+    public LocalCacheClient(string cacheDir)
     {
-      var json = File.ReadAllText(cacheFile);
-      var entries = JsonSerializer.Deserialize<Dictionary<string, CacheEntry>>(json);
-      foreach (var entry in entries)
-      {
-        if (!entry.Value.IsExpired)
+        _cacheDir = cacheDir;
+        _memoryCache = new Dictionary<string, object>();
+        _lock = new SemaphoreSlim(1, 1);
+
+        Directory.CreateDirectory(_cacheDir);
+    }
+
+    public async Task<bool> SetAsync<T>(string key, T value, TimeSpan? expiry = null)
+    {
+        await _lock.WaitAsync();
+        try
         {
-          _cache[entry.Key] = entry.Value;
+            _memoryCache[key] = value;
+
+            // Persist to disk
+            var path = Path.Combine(_cacheDir, key);
+            var json = System.Text.Json.JsonSerializer.Serialize(value);
+            await File.WriteAllTextAsync(path, json);
+
+            return true;
         }
-      }
+        finally
+        {
+            _lock.Release();
+        }
     }
-  }
 
-  private void PersistCache()
-  {
-    var cacheFile = Path.Combine(_dataDir, "cache.json");
-    var json = JsonSerializer.Serialize(_cache);
-    File.WriteAllText(cacheFile, json);
-  }
-
-  private void CleanupCallback(object state)
-  {
-    var expired = _cache.Where(kvp => kvp.Value.IsExpired)
-        .Select(kvp => kvp.Key)
-        .ToList();
-
-    foreach (var key in expired)
+    public async Task<T> GetAsync<T>(string key)
     {
-      _cache.TryRemove(key, out _);
+        await _lock.WaitAsync();
+        try
+        {
+            // Check memory cache first
+            if (_memoryCache.TryGetValue(key, out var cached))
+            {
+                return (T)cached;
+            }
+
+            // Check disk cache
+            var path = Path.Combine(_cacheDir, key);
+            if (File.Exists(path))
+            {
+                var json = await File.ReadAllTextAsync(path);
+                var value = System.Text.Json.JsonSerializer.Deserialize<T>(json);
+                _memoryCache[key] = value;
+                return value;
+            }
+
+            return default;
+        }
+        finally
+        {
+            _lock.Release();
+        }
     }
 
-    PersistCache();
-  }
+    public async Task<bool> DeleteAsync(string key)
+    {
+        await _lock.WaitAsync();
+        try
+        {
+            _memoryCache.Remove(key);
 
-  // Implement IRedisClient interface methods...
-  public ValueTask DisposeAsync()
-  {
-    throw new NotImplementedException();
-  }
-  public Task<bool> SetAsync<T>(string key, T value, TimeSpan? expiry = null)
-  {
-    throw new NotImplementedException();
-  }
-  public Task<T?> GetAsync<T>(string key)
-  {
-    throw new NotImplementedException();
-  }
-  public Task<bool> DeleteAsync(string key)
-  {
-    throw new NotImplementedException();
-  }
-  public Task<bool> ExistsAsync(string key)
-  {
-    throw new NotImplementedException();
-  }
-  public Task<long> PublishAsync(string channel, string message)
-  {
-    throw new NotImplementedException();
-  }
-  public IAsyncEnumerable<string> SubscribeAsync(string channel, CancellationToken cancellationToken = default)
-  {
-    throw new NotImplementedException();
-  }
+            var path = Path.Combine(_cacheDir, key);
+            if (File.Exists(path))
+            {
+                File.Delete(path);
+                return true;
+            }
+
+            return false;
+        }
+        finally
+        {
+            _lock.Release();
+        }
+    }
+
+    public async Task<bool> ExistsAsync(string key)
+    {
+        await _lock.WaitAsync();
+        try
+        {
+            return _memoryCache.ContainsKey(key) ||
+                   File.Exists(Path.Combine(_cacheDir, key));
+        }
+        finally
+        {
+            _lock.Release();
+        }
+    }
+
+    public async Task<long> PublishAsync(string channel, string message)
+    {
+        // Local implementation doesn't support pub/sub
+        return 0;
+    }
+
+    public async IAsyncEnumerable<string> SubscribeAsync(
+        string channel,
+        [System.Runtime.CompilerServices.EnumeratorCancellation]
+        CancellationToken cancellationToken = default)
+    {
+        // Local implementation doesn't support pub/sub
+        yield break;
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        _lock.Dispose();
+    }
 }

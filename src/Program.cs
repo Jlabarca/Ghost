@@ -1,21 +1,8 @@
-// Missing Types/Implementations:
-
-// Infrastructure
-// - IAutoMonitor implementation in AutoMonitor.cs needs ProcessMetrics collection
-// - ProcessMetricsCollector class in ProcessInfo.cs needs implementation
-// - RedisClient.SubscribeAsync() method implementation
-// - Complete CoreAPI implementation
-//
-// // Services
-// - Full ProjectGenerator service implementation
-// - AppRunner service implementation for new architecture
-// - AliasManager service implementation
-// - IStateManager completion in StateManager
-
-
 using Ghost.Commands;
+using Ghost.Infrastructure.Templates;
 using Ghost.SDK;
 using Microsoft.Extensions.DependencyInjection;
+using Spectre.Console;
 using Spectre.Console.Cli;
 
 namespace Ghost;
@@ -24,64 +11,110 @@ public static class Program
 {
     public static async Task<int> Main(string[] args)
     {
-        // Configure Ghost options
-        var options = new GhostOptions
+        try
         {
-            SystemId = "ghost-cli",
-            RedisConnectionString = "localhost:6379",
-            PostgresConnectionString = "Host=localhost;Database=ghost;Username=ghost;Password=ghost"
-        };
+            // Initialize Ghost SDK with GhostFather-specific configuration
+            var ghost = new GhostCore(opts =>
+            {
+                opts.SystemId = "ghost-father";
+                opts.UseRedis = false;  // Start with local cache for simplicity
+                opts.UsePostgres = false; // Start with SQLite for simplicity
+                opts.EnableMetrics = true;
+                opts.MetricsInterval = TimeSpan.FromSeconds(5);
 
-        // Initialize Ghost Core
-        var ghost = new GhostCore(opts =>
+                // Optional: Override default data directory
+                opts.DataDirectory = Path.Combine(
+                    Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                    "Ghost"
+                );
+
+                // Add any GhostFather-specific configuration
+                opts.AdditionalConfig["role"] = "manager";
+            });
+
+            // Build the Ghost application
+            var app = ghost.Build();
+
+            // Set up CLI-specific services
+            var services = new ServiceCollection();
+            services.AddSingleton(app);
+
+            // Add Ghost infrastructure
+            services.AddGhostInfrastructure(ghost.Options);
+
+            // Register Ghost app and its core services for CLI commands to use
+            services.AddSingleton(app);
+            services.AddSingleton(app.API);
+            services.AddSingleton(app.State);
+            services.AddSingleton(app.Config);
+            services.AddSingleton(app.Data);
+            services.AddSingleton(app.Monitor);
+
+            // Register template engine and project generator
+            var templatesPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "templates");
+            services.AddSingleton(sp => new TemplateEngine(templatesPath));
+            services.AddSingleton<ProjectGenerator>();
+
+            // Register CLI commands
+            services.AddTransient<StartCommand>();
+            services.AddTransient<CreateCommand>();
+            services.AddTransient<RunCommand>();
+            services.AddTransient<AliasCommand>();
+            services.AddTransient<ConfigCommand>();
+            //services.AddTransient<MonitorCommand>();
+
+            // Start the Ghost application
+            await app.StartAsync();
+
+            // Configure and run Spectre CLI
+            var registrar = new TypeRegistrar(services);
+            var cli = new CommandApp(registrar);
+
+            cli.Configure(config =>
+            {
+                config.SetApplicationName("ghost");
+
+                config.AddCommand<StartCommand>("start")
+                    .WithDescription("Start a Ghost application")
+                    .WithExample(new[] { "start" });
+
+                config.AddCommand<CreateCommand>("create")
+                    .WithDescription("Create a new Ghost application")
+                    .WithExample(new[] { "create", "MyApp" });
+
+                config.AddCommand<RunCommand>("run")
+                    .WithDescription("Run a Ghost application")
+                    .WithExample(new[] { "run", "myapp" });
+
+                config.AddCommand<AliasCommand>("alias")
+                    .WithDescription("Manage application aliases")
+                    .WithExample(new[] { "alias", "--create", "myapp", "--url", "https://github.com/user/app" });
+
+                config.AddCommand<ConfigCommand>("config")
+                    .WithDescription("Manage system configuration")
+                    .WithExample(new[] { "config", "set", "githubToken", "token123" });
+
+                // config.AddCommand<MonitorCommand>("monitor")
+                //     .WithDescription("Monitor Ghost processes")
+                //     .WithExample(new[] { "monitor" });
+            });
+
+            // Run the CLI command
+            var result = await cli.RunAsync(args);
+
+            // Clean shutdown
+            await app.StopAsync();
+
+            return result;
+        }
+        catch (Exception ex)
         {
-            opts.SystemId = options.SystemId;
-            opts.RedisConnectionString = options.RedisConnectionString;
-            opts.PostgresConnectionString = options.PostgresConnectionString;
-            opts.EnableMetrics = true;
-        });
-
-        // Setup services
-        var services = new ServiceCollection();
-        services.AddSingleton(options);
-        services.AddSingleton(p => ghost.Build());
-
-        // Register commands
-        services.AddTransient<RunCommand>();
-        services.AddTransient<CreateCommand>();
-        services.AddTransient<AliasCommand>();
-        //services.AddTransient<MonitorCommand>();
-        services.AddTransient<ConfigCommand>();
-
-        // Build Spectre CLI
-        var registrar = new TypeRegistrar(services);
-        var app = new CommandApp(registrar);
-
-        app.Configure(config =>
-        {
-            config.SetApplicationName("ghost");
-
-            config.AddCommand<RunCommand>("run")
-                .WithDescription("Run a Ghost application")
-                .WithExample("run", "--url", "https://github.com/user/app");
-
-            config.AddCommand<CreateCommand>("create")
-                .WithDescription("Create a new Ghost application")
-                .WithExample("create", "MyApp");
-
-            config.AddCommand<AliasCommand>("alias")
-                .WithDescription("Manage application aliases")
-                .WithExample("alias", "--create", "myapp", "--url", "https://github.com/user/app");
-
-            // config.AddCommand<MonitorCommand>("monitor")
-            //     .WithDescription("Monitor running applications")
-            //     .WithExample(new[] { "monitor" });
-
-            config.AddCommand<ConfigCommand>("config")
-                .WithDescription("Manage system configuration")
-                .WithExample("config", "set", "githubToken", "token123");
-        });
-
-        return await app.RunAsync(args);
+            AnsiConsole.MarkupLine($"[red]Fatal error:[/] {ex.Message}");
+            if (ex.InnerException != null)
+            {
+                AnsiConsole.MarkupLine($"[grey]Caused by:[/] {ex.InnerException.Message}");
+            }
+            return 1;
+        }
     }
 }

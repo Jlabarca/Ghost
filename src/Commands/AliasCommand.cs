@@ -1,5 +1,6 @@
 using Ghost.Infrastructure;
 using Ghost.Infrastructure.Data;
+using Ghost.Infrastructure.Logging;
 using Ghost.Infrastructure.Orchestration;
 using Spectre.Console;
 using Spectre.Console.Cli;
@@ -10,6 +11,7 @@ public class AliasCommand : AsyncCommand<AliasCommand.Settings>
 {
     private readonly IConfigManager _configManager;
     private readonly IDataAPI _dataApi;
+    private readonly GhostLogger _logger;
 
     public class Settings : GhostCommandSettings
     {
@@ -30,10 +32,11 @@ public class AliasCommand : AsyncCommand<AliasCommand.Settings>
         public string Target { get; set; }
     }
 
-    public AliasCommand(IConfigManager configManager, IDataAPI dataApi)
+    public AliasCommand(IConfigManager configManager, IDataAPI dataApi, GhostLogger logger)
     {
         _configManager = configManager;
         _dataApi = dataApi;
+        _logger = logger;
     }
 
     public override async Task<int> ExecuteAsync(CommandContext context, Settings settings)

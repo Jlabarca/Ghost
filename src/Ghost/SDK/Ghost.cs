@@ -1,13 +1,11 @@
 using Ghost.Core.Config;
 using Ghost.Core.Storage;
-using Microsoft.Extensions.Logging;
+using Ghost.Father;
+using Ghost.SDK;
 
-namespace Ghost.SDK;
+namespace Ghost;
 
-/// <summary>
-/// Static facade for accessing Ghost functionality
-/// </summary>
-public static partial class Ghost
+public static partial class G
 {
     private static GhostAppBase _current;
     private static readonly object _lock = new();
@@ -38,14 +36,5 @@ public static partial class Ghost
         {
             _current = app ?? throw new ArgumentNullException(nameof(app));
         }
-    }
-
-    public static ILogger<T> CreateLogger<T>()
-    {
-        return LoggerFactory
-            .Create(builder => builder
-                .AddConsole()
-                .AddProvider(new GhostLoggingProvider(GetCurrent().Logger)))
-            .CreateLogger<T>();
     }
 }

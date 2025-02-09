@@ -1,15 +1,13 @@
-using Ghost2.Infrastructure;
-using Microsoft.Extensions.Logging;
+using Ghost.SDK;
 using YamlDotNet.Serialization;
 using YamlDotNet.Serialization.NamingConventions;
 
 namespace Ghost.Core.Config;
 
 /// <summary>
-/// Manages application configuration using YAML files
-/// Provides type-safe access to configuration values with change tracking
+/// Configuration management interface
 /// </summary>
-public interface IGhostConfig : IAsyncDisposable
+public interface IGhostConfig : IAsyncDisposable, IConfigInitializer, IConfigPersister
 {
     Task<T> GetAsync<T>(string key, T defaultValue = default);
     Task SetAsync<T>(string key, T value);
@@ -19,6 +17,9 @@ public interface IGhostConfig : IAsyncDisposable
     event EventHandler<ConfigChangedEventArgs> ConfigChanged;
 }
 
+/// <summary>
+/// Arguments for configuration change events
+/// </summary>
 public class ConfigChangedEventArgs : EventArgs
 {
     public string Key { get; }
@@ -33,12 +34,14 @@ public class ConfigChangedEventArgs : EventArgs
     }
 }
 
+/// <summary>
+/// YAML-based configuration manager with change tracking and hot reload
+/// </summary>
 public class GhostConfig : IGhostConfig
 {
     private readonly string _configPath;
     private readonly IDeserializer _deserializer;
     private readonly ISerializer _serializer;
-    private readonly ILogger _logger;
     private readonly SemaphoreSlim _lock = new(1, 1);
     private readonly Dictionary<string, object> _cache;
     private readonly FileSystemWatcher _watcher;
@@ -46,16 +49,18 @@ public class GhostConfig : IGhostConfig
 
     public event EventHandler<ConfigChangedEventArgs> ConfigChanged;
 
-    public GhostConfig(GhostOptions options, ILogger<GhostConfig> logger)
+    public GhostConfig(GhostOptions options)
     {
+        if (options == null) throw new ArgumentNullException(nameof(options));
+
         _configPath = Path.GetFullPath(Path.Combine(
             options.DataDirectory ?? "config",
             ".ghost.yaml"
         ));
 
-        _logger = logger;
         _cache = new Dictionary<string, object>();
 
+        // Initialize YAML serializers
         _deserializer = new DeserializerBuilder()
             .WithNamingConvention(CamelCaseNamingConvention.Instance)
             .Build();
@@ -65,18 +70,72 @@ public class GhostConfig : IGhostConfig
             .Build();
 
         // Ensure config directory exists
-        Directory.CreateDirectory(Path.GetDirectoryName(_configPath));
+        var configDir = Path.GetDirectoryName(_configPath);
+        if (!Directory.Exists(configDir))
+        {
+            Directory.CreateDirectory(configDir);
+            G.LogInfo("Created configuration directory: {0}", configDir);
+        }
 
         // Set up file watcher
         _watcher = new FileSystemWatcher
         {
-            Path = Path.GetDirectoryName(_configPath),
+            Path = configDir,
             Filter = Path.GetFileName(_configPath),
             NotifyFilter = NotifyFilters.LastWrite | NotifyFilters.Size
         };
 
         _watcher.Changed += async (s, e) => await OnConfigFileChanged();
         _watcher.EnableRaisingEvents = true;
+
+        G.LogInfo("Configuration initialized at: {0}", _configPath);
+    }
+
+    public async Task LoadConfigurationAsync()
+    {
+        await _lock.WaitAsync();
+        try
+        {
+            _cache.Clear();
+            var config = await LoadConfigAsync();
+            if (config != null)
+            {
+                var keys = new List<string>();
+                CollectKeys(config, "", keys);
+                G.LogInfo("Loaded {0} configuration keys", keys.Count);
+            }
+        }
+        catch (Exception ex)
+        {
+            G.LogError("Failed to load configuration", ex);
+            throw;
+        }
+        finally
+        {
+            _lock.Release();
+        }
+    }
+
+    public async Task PersistConfigurationAsync()
+    {
+        if (_cache.Count == 0) return;
+
+        await _lock.WaitAsync();
+        try
+        {
+            var config = await LoadConfigAsync() ?? new Dictionary<object, object>();
+            await SaveConfigAsync(config);
+            G.LogInfo("Configuration persisted successfully");
+        }
+        catch (Exception ex)
+        {
+            G.LogError("Failed to persist configuration", ex);
+            throw;
+        }
+        finally
+        {
+            _lock.Release();
+        }
     }
 
     public async Task<T> GetAsync<T>(string key, T defaultValue = default)
@@ -119,11 +178,12 @@ public class GhostConfig : IGhostConfig
 
                 // Update cache
                 _cache[key] = result;
+                G.LogDebug("Retrieved config value for key: {0}", key);
                 return result;
             }
             catch (Exception ex)
             {
-                _logger.LogWarning(ex, "Failed to convert config value for key: {Key}", key);
+                G.LogWarn("Failed to convert config value for key: {0} - {1}", key, ex.Message);
                 return defaultValue;
             }
         }
@@ -155,6 +215,7 @@ public class GhostConfig : IGhostConfig
 
             // Notify change
             OnConfigChanged(key, oldValue, value);
+            G.LogDebug("Updated config value for key: {0}", key);
         }
         finally
         {
@@ -185,6 +246,7 @@ public class GhostConfig : IGhostConfig
 
             // Notify change
             OnConfigChanged(key, oldValue, null);
+            G.LogDebug("Deleted config key: {0}", key);
         }
         finally
         {
@@ -250,7 +312,7 @@ public class GhostConfig : IGhostConfig
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Failed to load config file: {Path}", _configPath);
+            G.LogError("Failed to load config file: {0}", ex, _configPath);
             throw new GhostException(
                 "Failed to load configuration file",
                 ex,
@@ -267,7 +329,7 @@ public class GhostConfig : IGhostConfig
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Failed to save config file: {Path}", _configPath);
+            G.LogError("Failed to save config file: {0}", ex, _configPath);
             throw new GhostException(
                 "Failed to save configuration file",
                 ex,
@@ -281,7 +343,7 @@ public class GhostConfig : IGhostConfig
         try
         {
             _cache.Clear();
-            _logger.LogInformation("Configuration file changed, cache cleared");
+            G.LogInfo("Configuration file changed, cache cleared");
         }
         finally
         {
@@ -297,7 +359,7 @@ public class GhostConfig : IGhostConfig
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Error in config change handler");
+            G.LogError("Error in config change handler", ex);
         }
     }
 
@@ -309,7 +371,7 @@ public class GhostConfig : IGhostConfig
         for (var i = 0; i < parts.Length - 1; i++)
         {
             if (!current.TryGetValue(parts[i], out var next) ||
-                !(next is Dictionary<object, object> dict))
+                next is not Dictionary<object, object> dict)
             {
                 return null;
             }
@@ -345,7 +407,7 @@ public class GhostConfig : IGhostConfig
         for (var i = 0; i < parts.Length - 1; i++)
         {
             if (!current.TryGetValue(parts[i], out var next) ||
-                !(next is Dictionary<object, object> dict))
+                next is not Dictionary<object, object> dict)
             {
                 return;
             }
@@ -383,9 +445,12 @@ public class GhostConfig : IGhostConfig
             if (_disposed) return;
             _disposed = true;
 
+            await PersistConfigurationAsync();
             _watcher.Dispose();
             _lock.Dispose();
             _cache.Clear();
+
+            G.LogInfo("Configuration disposed successfully");
         }
         finally
         {

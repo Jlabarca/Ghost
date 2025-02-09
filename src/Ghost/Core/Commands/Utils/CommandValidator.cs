@@ -4,8 +4,7 @@ using Spectre.Console;
 using Spectre.Console.Cli;
 using System.Reflection;
 
-//TODO: move file but think about it first
-namespace Ghost.Infrastructure.Validation;
+namespace Ghost.Core.Validation;
 
 public class CommandValidator
 {

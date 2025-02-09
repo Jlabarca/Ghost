@@ -1,11 +1,10 @@
+using Ghost.Core.Storage.Cache;
 using Ghost.Infrastructure.Logging;
 using Microsoft.Extensions.Logging;
-using System.Collections.Concurrent;
-using System.Text.Json;
 
 namespace Ghost;
 
-public static partial class Ghost
+public static partial class G
 {
   private static GhostLogger? _logger;
 
@@ -32,5 +31,34 @@ public static partial class Ghost
     {
       throw new InvalidOperationException("Ghost logger not initialized. Call Ghost.Initialize() first.");
     }
+  }
+
+  public static void LogInfo(string message, params object[] args)
+  {
+     LogInfo(string.Format(message, args));
+  }
+
+  public static void LogDebug(string message, params object[] args)
+  {
+     LogDebug(string.Format(message, args));
+  }
+
+  public static void LogWarn(string message, params object[] args)
+  {
+     LogWarn(string.Format(message, args));
+  }
+
+  public static void LogError(string message, params object[] args)
+  {
+     LogError(string.Format(message, args));
+  }
+
+  public static void LogError(Exception ex, string message, params object[] args)
+  {
+    LogError(string.Format(message, args), ex);
+  }
+  public static void SetCache(ICache cache)
+  {
+    _logger.SetCache(cache);
   }
 }

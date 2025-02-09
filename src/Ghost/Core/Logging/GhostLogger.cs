@@ -1,9 +1,9 @@
-using Ghost.Core.Storage;
 using Ghost.Core.Storage.Cache;
-using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using Spectre.Console;
 using System.Collections.Concurrent;
 using System.Text.Json;
+using System.Runtime.CompilerServices;
 
 namespace Ghost.Infrastructure.Logging;
 
@@ -11,9 +11,18 @@ public class GhostLogger : ILogger
 {
     private readonly string _processId;
     private readonly GhostLoggerConfiguration _config;
-    private readonly ICache _cache;
+    private ICache _cache;
     private readonly ConcurrentQueue<LogEntry> _redisBuffer;
     private readonly SemaphoreSlim _logLock = new(1, 1);
+    private static readonly Dictionary<LogLevel, Color> LogLevelColors = new()
+    {
+        { LogLevel.Trace, Color.Grey },
+        { LogLevel.Debug, Color.Blue },
+        { LogLevel.Information, Color.Green },
+        { LogLevel.Warning, Color.Yellow },
+        { LogLevel.Error, Color.Red },
+        { LogLevel.Critical, Color.Red1 }
+    };
 
     public GhostLogger(ICache cache, GhostLoggerConfiguration config)
     {
@@ -26,10 +35,17 @@ public class GhostLogger : ILogger
         Directory.CreateDirectory(_config.OutputsPath);
     }
 
+    public void SetCache(ICache cache)
+    {
+        _cache = cache;
+    }
+
     public IDisposable? BeginScope<TState>(TState state) where TState : notnull => default;
 
-    public bool IsEnabled(LogLevel logLevel) => true;
-
+    public bool IsEnabled(LogLevel logLevel)
+    {
+        return logLevel >= _config.LogLevel;
+    }
     public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter)
     {
         if (!IsEnabled(logLevel))
@@ -39,22 +55,37 @@ public class GhostLogger : ILogger
         Log(message, logLevel, exception);
     }
 
-    public void Log(string message, LogLevel level, Exception? exception = null)
+    public void Log(string message,
+            LogLevel level,
+            Exception? exception = null,
+            [CallerFilePath] string sourceFilePath = "",
+            [CallerLineNumber] int sourceLineNumber = 0)
     {
+        if (!IsEnabled(level))
+            return;
+
         var entry = new LogEntry
         {
             Timestamp = DateTime.UtcNow,
             Level = level,
             Message = message,
             Exception = exception?.ToString(),
-            ProcessId = _processId
+            ProcessId = _processId,
+            SourceFilePath = sourceFilePath,
+            SourceLineNumber = sourceLineNumber
         };
+
+        // Log to console with Spectre formatting
+        LogToConsole(entry);
 
         _logLock.Wait();
         try
         {
             // Log to Redis (GhostLogs system)
-            LogToRedis(entry);
+            if (_cache != null)
+            {
+                LogToRedis(entry);
+            }
 
             // Log to file if it's process output
             if (level == LogLevel.Information)
@@ -73,6 +104,48 @@ public class GhostLogger : ILogger
         finally
         {
             _logLock.Release();
+        }
+    }
+
+    private void LogToConsole(LogEntry entry)
+    {
+        var color = LogLevelColors.GetValueOrDefault(entry.Level, Color.White);
+        var timestamp = entry.Timestamp.ToString("HH:mm:ss.fff");
+        var logLevel = entry.Level.ToString().ToUpper().PadRight(9);
+
+        // Build the location info if enabled
+        var locationInfo = "";
+        // if (_config.ShowSourceLocation && !string.IsNullOrEmpty(entry.SourceFilePath))
+        // {
+        //     var fileName = Path.GetFileName(entry.SourceFilePath);
+        //     locationInfo = $"{fileName}:{entry.SourceLineNumber}";
+        // }
+
+        // Create a clean single-line log message
+        var logMessage = $"{timestamp} {logLevel} {locationInfo}{entry.Message}";
+
+        // Apply colors using style instead of markup
+        AnsiConsole.Write(new Text(logMessage, new Style(
+            foreground: entry.Level switch
+            {
+                LogLevel.Trace => Color.Grey,
+                LogLevel.Debug => Color.Blue,
+                LogLevel.Information => Color.Green,
+                LogLevel.Warning => Color.Yellow,
+                LogLevel.Error => Color.Red,
+                LogLevel.Critical => Color.Red1,
+                _ => Color.White
+            })));
+
+        AnsiConsole.WriteLine();
+
+        // If there's an exception, display it on the next line with proper formatting
+        if (entry.Exception != null)
+        {
+            AnsiConsole.Write(new Panel(entry.Exception)
+                .BorderColor(color)
+                .RoundedBorder()
+                .Padding(1, 1, 1, 1));
         }
     }
 
@@ -120,7 +193,14 @@ public class GhostLogger : ILogger
 
     private string FormatLogLine(LogEntry entry)
     {
-        var line = $"{entry.Timestamp:yyyy-MM-dd HH:mm:ss.fff} [{entry.Level}] {entry.Message}";
+        var locationInfo = "";
+        if (_config.ShowSourceLocation && !string.IsNullOrEmpty(entry.SourceFilePath))
+        {
+            var fileName = Path.GetFileName(entry.SourceFilePath);
+            locationInfo = $" [{fileName}:{entry.SourceLineNumber}]";
+        }
+
+        var line = $"{entry.Timestamp:yyyy-MM-dd HH:mm:ss.fff} [{entry.Level}]{locationInfo} {entry.Message}";
         if (entry.Exception != null)
         {
             line += Environment.NewLine + entry.Exception;
@@ -173,44 +253,20 @@ public class GhostLogger : ILogger
     private static readonly ConcurrentDictionary<string, DateTime> LastCleanupTime = new();
 }
 
-public class GhostLoggerConfiguration
+public static class LoggerExtensions
 {
-    public string RedisKeyPrefix { get; set; } = "ghost:logs";
-    public int RedisMaxLogs { get; set; } = 1000;
-    public string LogsPath { get; set; } = "logs";
-    public string OutputsPath { get; set; } = "outputs";
-    public int MaxFilesPerDirectory { get; set; } = 100;
-    public long MaxLogsSizeBytes { get; set; } = 100 * 1024 * 1024;    // 100MB
-    public long MaxOutputSizeBytes { get; set; } = 500 * 1024 * 1024;  // 500MB
-}
-
-public class LogEntry
-{
-    public DateTime Timestamp { get; set; }
-    public LogLevel Level { get; set; }
-    public string Message { get; set; } = "";
-    public string? Exception { get; set; }
-    public string ProcessId { get; set; } = "";
-}
-
-public static class GhostLoggerExtensions
-{
-    public static IServiceCollection AddGhostLogger(
-        this IServiceCollection services,
-        Action<GhostLoggerConfiguration>? configure = null)
+    public static void LogWithCaller(
+            this ILogger logger,
+            LogLevel logLevel,
+            string message,
+            [CallerLineNumber] int lineNumber = 0,
+            [CallerFilePath] string filePath = "")
     {
-        var config = new GhostLoggerConfiguration();
-        configure?.Invoke(config);
-
-        services.AddSingleton(config);
-        services.AddSingleton<ILogger, GhostLogger>();
-        services.AddSingleton(sp =>
-        {
-            var logger = sp.GetRequiredService<ILogger>() as GhostLogger;
-            //Ghost.Initialize(logger!);
-            return logger;
-        });
-
-        return services;
+        logger.Log(
+                logLevel,
+                new EventId(0),
+                $"[{Path.GetFileName(filePath)}:{lineNumber}] {message}",
+                null,
+                (state, ex) => state.ToString()!);
     }
 }

@@ -1,3 +1,5 @@
+using Ghost.Core.Monitoring;
+
 namespace Ghost.Father.Models;
 
 public class ProcessHealth

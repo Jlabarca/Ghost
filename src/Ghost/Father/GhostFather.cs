@@ -1,107 +1,85 @@
-// Ghost/Father/GhostFather.cs
-using System.Collections.Concurrent;
-using Ghost.Core.Services;
-using Ghost.Core.Storage;
+using Ghost.Core.Config;
 using Ghost.SDK;
 
 namespace Ghost.Father;
 
 /// <summary>
-/// Core process manager and monitoring service for Ghost applications
+/// Core process supervisor and orchestration service for Ghost applications
 /// </summary>
-public class GhostFather : GhostApp
+public class GhostFather : GhostServiceApp
 {
-    private readonly ConcurrentDictionary<string, ProcessInfo> _processes;
+    private readonly ProcessManager _processManager;
     private readonly HealthMonitor _healthMonitor;
     private readonly CommandProcessor _commandProcessor;
     private readonly StateManager _stateManager;
 
     public GhostFather(GhostOptions options = null) : base(options)
     {
-        _processes = new ConcurrentDictionary<string, ProcessInfo>();
-        _healthMonitor = new HealthMonitor(Bus, Logger);
-        _commandProcessor = new CommandProcessor(Bus, Logger);
-        _stateManager = new StateManager(Data, Logger);
+        _processManager = new ProcessManager(Bus, Data, Config, new HealthMonitor(Bus), new StateManager(Data));
+        _healthMonitor = new HealthMonitor(Bus);
+        _commandProcessor = new CommandProcessor(Bus);
+        _stateManager = new StateManager(Data);
     }
 
     protected override async Task ExecuteAsync(CancellationToken ct)
     {
-        Logger.LogInformation("GhostFather starting...");
+        G.LogInfo("GhostFather starting...");
 
         try
         {
             // Initialize components
             await InitializeAsync();
 
-            // Start monitoring
-            _ = _healthMonitor.StartMonitoringAsync(ct);
+            // Start process manager
+            if (_processManager is ProcessManager pm)
+            {
+                await pm.InitializeAsync();
+            }
 
             // Start command processing
             _ = _commandProcessor.StartProcessingAsync(ct);
 
             // Subscribe to system events
-            await foreach (var evt in Bus.SubscribeAsync<SystemEvent>("ghost:events", ct))
+            await foreach (var evt in Bus.SubscribeAsync<AutoMonitor.SystemEvent>("ghost:events", ct))
             {
-                await HandleSystemEventAsync(evt);
+                try
+                {
+                    await HandleSystemEventAsync(evt);
+                }
+                catch (Exception ex)
+                {
+                    G.LogError("Error handling system event: {0}", ex, evt.Type);
+                }
             }
+        }
+        catch (OperationCanceledException)
+        {
+            G.LogInfo("GhostFather shutdown requested");
+            throw;
         }
         catch (Exception ex)
         {
-            Logger.LogError(ex, "Fatal error in GhostFather");
+            G.LogError("Fatal error in GhostFather", ex);
             throw;
         }
     }
 
     private async Task InitializeAsync()
     {
-        // Load existing processes
-        var processes = await Data.QueryAsync<ProcessInfo>(
-            "SELECT * FROM processes WHERE status != @status",
-            new { status = ProcessStatus.Stopped });
-
-        foreach (var process in processes)
-        {
-            _processes[process.Id] = process;
-            await _healthMonitor.RegisterProcessAsync(process);
-        }
-
-        // Set up command handlers
-        _commandProcessor.RegisterHandler("start", HandleStartCommandAsync);
-        _commandProcessor.RegisterHandler("stop", HandleStopCommandAsync);
-        _commandProcessor.RegisterHandler("restart", HandleRestartCommandAsync);
-        _commandProcessor.RegisterHandler("status", HandleStatusCommandAsync);
-    }
-
-    private async Task HandleSystemEventAsync(SystemEvent evt)
-    {
         try
         {
-            switch (evt.Type)
-            {
-                case "process.registered":
-                    await HandleProcessRegistrationAsync(evt);
-                    break;
+            // Register command handlers
+            _commandProcessor.RegisterHandler("start", HandleStartCommandAsync);
+            _commandProcessor.RegisterHandler("stop", HandleStopCommandAsync);
+            _commandProcessor.RegisterHandler("restart", HandleRestartCommandAsync);
+            _commandProcessor.RegisterHandler("status", HandleStatusCommandAsync);
 
-                case "process.stopped":
-                    await HandleProcessStoppedAsync(evt);
-                    break;
-
-                case "process.crashed":
-                    await HandleProcessCrashAsync(evt);
-                    break;
-
-                case "health.check":
-                    await HandleHealthCheckAsync(evt);
-                    break;
-
-                default:
-                    Logger.LogWarning("Unknown system event type: {Type}", evt.Type);
-                    break;
-            }
+            G.LogInfo("GhostFather initialized");
         }
         catch (Exception ex)
         {
-            Logger.LogError(ex, "Error handling system event: {Type}", evt.Type);
+            G.LogError("Failed to initialize GhostFather", ex);
+            throw;
         }
     }
 
@@ -113,12 +91,9 @@ public class GhostFather : GhostApp
             throw new ArgumentException("Process ID required");
         }
 
-        if (!_processes.TryGetValue(processId, out var process))
-        {
-            throw new GhostException($"Process not found: {processId}");
-        }
+        await _processManager.StartProcessAsync(processId);
 
-        await StartProcessAsync(process);
+        await SendCommandResponseAsync(cmd, true);
     }
 
     private async Task HandleStopCommandAsync(SystemCommand cmd)
@@ -129,12 +104,9 @@ public class GhostFather : GhostApp
             throw new ArgumentException("Process ID required");
         }
 
-        if (!_processes.TryGetValue(processId, out var process))
-        {
-            throw new GhostException($"Process not found: {processId}");
-        }
+        await _processManager.StopProcessAsync(processId);
 
-        await StopProcessAsync(process);
+        await SendCommandResponseAsync(cmd, true);
     }
 
     private async Task HandleRestartCommandAsync(SystemCommand cmd)
@@ -145,202 +117,132 @@ public class GhostFather : GhostApp
             throw new ArgumentException("Process ID required");
         }
 
-        if (!_processes.TryGetValue(processId, out var process))
-        {
-            throw new GhostException($"Process not found: {processId}");
-        }
+        await _processManager.RestartProcessAsync(processId);
 
-        await RestartProcessAsync(process);
+        await SendCommandResponseAsync(cmd, true);
     }
 
     private async Task HandleStatusCommandAsync(SystemCommand cmd)
     {
-        var processId = cmd.Parameters.GetValueOrDefault("processId");
-
-        // Get status for specific process or all processes
-        var statuses = string.IsNullOrEmpty(processId)
-            ? _processes.Values.ToDictionary(p => p.Id, p => p.Status)
-            : _processes.TryGetValue(processId, out var process)
-                ? new Dictionary<string, ProcessStatus> { { process.Id, process.Status } }
-                : new Dictionary<string, ProcessStatus>();
-
-        await Bus.PublishAsync("ghost:responses", new
-        {
-            RequestId = cmd.Parameters.GetValueOrDefault("requestId"),
-            Statuses = statuses
-        });
-    }
-
-    private async Task HandleProcessRegistrationAsync(SystemEvent evt)
-    {
         try
         {
-            var registration = JsonSerializer.Deserialize<ProcessRegistration>(evt.Data);
+            var processId = cmd.Parameters.GetValueOrDefault("processId");
+            var status = await _processManager.GetProcessStatusAsync(processId);
 
-            var process = new ProcessInfo(
-                Id: evt.Source,
-                Metadata: new ProcessMetadata(
-                    registration.Name,
-                    registration.Type,
-                    registration.Version,
-                    registration.Environment ?? new Dictionary<string, string>(),
-                    registration.Configuration ?? new Dictionary<string, string>()
-                ),
-                StartInfo: CreateStartInfo(registration)
-            );
-
-            // Store process
-            _processes[process.Id] = process;
-            await _stateManager.SaveProcessAsync(process);
-
-            // Start monitoring
-            await _healthMonitor.RegisterProcessAsync(process);
-
-            Logger.LogInformation(
-                "Registered new process: {Id} ({Name})",
-                process.Id,
-                registration.Name);
-        }
-        catch (Exception ex)
-        {
-            Logger.LogError(ex, "Failed to handle process registration from {Source}", evt.Source);
-        }
-    }
-
-    private async Task HandleProcessStoppedAsync(SystemEvent evt)
-    {
-        if (_processes.TryGetValue(evt.Source, out var process))
-        {
-            process.Status = ProcessStatus.Stopped;
-            await _stateManager.UpdateProcessStatusAsync(evt.Source, ProcessStatus.Stopped);
-            Logger.LogInformation("Process stopped: {Id}", evt.Source);
-        }
-    }
-
-    private async Task HandleProcessCrashAsync(SystemEvent evt)
-    {
-        if (_processes.TryGetValue(evt.Source, out var process))
-        {
-            process.Status = ProcessStatus.Crashed;
-            await _stateManager.UpdateProcessStatusAsync(evt.Source, ProcessStatus.Crashed);
-            Logger.LogError("Process crashed: {Id}", evt.Source);
-
-            // Attempt restart if configured
-            if (process.Metadata.Configuration.GetValueOrDefault("autoRestart") == "true")
+            await Bus.PublishAsync("ghost:responses", new
             {
-                await RestartProcessAsync(process);
-            }
+                RequestId = cmd.Parameters.GetValueOrDefault("requestId"),
+                Status = status,
+                Timestamp = DateTime.UtcNow
+            });
+        }
+        catch (Exception ex)
+        {
+            G.LogError("Error getting process status", ex);
+            await SendCommandResponseAsync(cmd, false, ex.Message);
         }
     }
 
-    private async Task HandleHealthCheckAsync(SystemEvent evt)
+    private async Task HandleSystemEventAsync(AutoMonitor.SystemEvent evt)
     {
-        if (_processes.TryGetValue(evt.Source, out var process))
+        // ProcessManager now handles all system events internally
+        // GhostFather only needs to handle high-level orchestration events
+        switch (evt.Type)
         {
-            var health = JsonSerializer.Deserialize<ProcessHealth>(evt.Data);
+            case "ghost.started":
+                G.LogInfo("Ghost environment started");
+                break;
 
-            // Update process metrics
-            await _stateManager.UpdateProcessMetricsAsync(evt.Source, health.Metrics);
+            case "ghost.stopping":
+                G.LogInfo("Ghost environment stopping");
+                break;
 
-            // Check resource thresholds
-            if (health.Metrics.CpuPercentage > 90 || health.Metrics.MemoryBytes > 1_000_000_000)
+            case "ghost.config.changed":
+                await HandleConfigChangedAsync(evt);
+                break;
+
+            case "ghost.error":
+                await HandleSystemErrorAsync(evt);
+                break;
+
+            default:
+                // Forward unknown events to ProcessManager
+                break;
+        }
+    }
+
+    private async Task HandleConfigChangedAsync(AutoMonitor.SystemEvent evt)
+    {
+        try
+        {
+            var config = evt.GetData<GhostConfig>();
+            // Handle configuration changes...
+            G.LogInfo("Configuration updated");
+        }
+        catch (Exception ex)
+        {
+            G.LogError("Error handling config change", ex);
+        }
+    }
+
+    private async Task HandleSystemErrorAsync(AutoMonitor.SystemEvent evt)
+    {
+        try
+        {
+            var error = evt.GetData<SystemError>();
+            G.LogError("System error: {0} - {1}", error.Code, error.Message);
+            // Handle system error...
+        }
+        catch (Exception ex)
+        {
+            G.LogError("Error handling system error", ex);
+        }
+    }
+
+    private async Task SendCommandResponseAsync(SystemCommand cmd, bool success, string error = null)
+    {
+        try
+        {
+            var response = new
             {
-                process.Status = ProcessStatus.Warning;
-                await _stateManager.UpdateProcessStatusAsync(evt.Source, ProcessStatus.Warning);
+                RequestId = cmd.Parameters.GetValueOrDefault("requestId"),
+                Command = cmd.CommandType,
+                Success = success,
+                Error = error,
+                Timestamp = DateTime.UtcNow
+            };
 
-                Logger.LogWarning(
-                    "Process {Id} resource usage high - CPU: {Cpu}%, Memory: {Memory}MB",
-                    evt.Source,
-                    health.Metrics.CpuPercentage,
-                    health.Metrics.MemoryBytes / 1024 / 1024);
-            }
-        }
-    }
-
-    private async Task StartProcessAsync(ProcessInfo process)
-    {
-        try
-        {
-            Logger.LogInformation("Starting process: {Id}", process.Id);
-
-            await process.StartAsync();
-            process.Status = ProcessStatus.Running;
-
-            await _stateManager.UpdateProcessStatusAsync(process.Id, ProcessStatus.Running);
+            await Bus.PublishAsync("ghost:responses", response);
         }
         catch (Exception ex)
         {
-            process.Status = ProcessStatus.Failed;
-            await _stateManager.UpdateProcessStatusAsync(process.Id, ProcessStatus.Failed);
-
-            Logger.LogError(ex, "Failed to start process: {Id}", process.Id);
-            throw;
+            G.LogError("Failed to send command response", ex);
         }
-    }
-
-    private async Task StopProcessAsync(ProcessInfo process)
-    {
-        try
-        {
-            Logger.LogInformation("Stopping process: {Id}", process.Id);
-
-            await process.StopAsync(TimeSpan.FromSeconds(30));
-            process.Status = ProcessStatus.Stopped;
-
-            await _stateManager.UpdateProcessStatusAsync(process.Id, ProcessStatus.Stopped);
-        }
-        catch (Exception ex)
-        {
-            Logger.LogError(ex, "Failed to stop process: {Id}", process.Id);
-            throw;
-        }
-    }
-
-    private async Task RestartProcessAsync(ProcessInfo process)
-    {
-        try
-        {
-            Logger.LogInformation("Restarting process: {Id}", process.Id);
-
-            await StopProcessAsync(process);
-            await StartProcessAsync(process);
-        }
-        catch (Exception ex)
-        {
-            Logger.LogError(ex, "Failed to restart process: {Id}", process.Id);
-            throw;
-        }
-    }
-
-    private static ProcessStartInfo CreateStartInfo(ProcessRegistration registration)
-    {
-        return new ProcessStartInfo
-        {
-            FileName = "dotnet",
-            Arguments = $"run --project \"{registration.Path}\"",
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            UseShellExecute = false,
-            CreateNoWindow = true,
-            Environment =
-            {
-                ["GHOST_PROCESS_ID"] = registration.Id,
-                ["GHOST_ENVIRONMENT"] = registration.Environment?
-                    .GetValueOrDefault("ASPNETCORE_ENVIRONMENT", "Production")
-            }
-        };
     }
 
     public override async Task StopAsync()
     {
-        // Stop all processes
-        var stopTasks = _processes.Values
-            .Where(p => p.Status == ProcessStatus.Running)
-            .Select(p => StopProcessAsync(p));
+        try
+        {
+            if (_processManager is IAsyncDisposable disposable)
+            {
+                await disposable.DisposeAsync();
+            }
 
-        await Task.WhenAll(stopTasks);
+            G.LogInfo("GhostFather stopped");
+        }
+        catch (Exception ex)
+        {
+            G.LogError("Error during GhostFather shutdown", ex);
+        }
 
         await base.StopAsync();
     }
 }
 
+public class SystemError
+{
+    public string Code { get; set; }
+    public string Message { get; set; }
+    public Dictionary<string, string> Context { get; set; }
+}

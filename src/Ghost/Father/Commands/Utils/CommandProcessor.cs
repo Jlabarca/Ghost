@@ -1,4 +1,5 @@
 using Ghost.Core;
+using Ghost.Core.Storage;
 using Microsoft.Extensions.Logging;
 using System.Text.Json;
 namespace Ghost.Father;
@@ -9,13 +10,11 @@ namespace Ghost.Father;
 public class CommandProcessor
 {
   private readonly IGhostBus _bus;
-  private readonly ILogger _logger;
   private readonly Dictionary<string, Func<SystemCommand, Task>> _handlers;
 
-  public CommandProcessor(IGhostBus bus, ILogger logger)
+  public CommandProcessor(IGhostBus bus)
   {
     _bus = bus;
-    _logger = logger;
     _handlers = new Dictionary<string, Func<SystemCommand, Task>>();
   }
 
@@ -42,11 +41,11 @@ public class CommandProcessor
         }
         catch (JsonException ex)
         {
-          _logger.LogError(ex, "Failed to parse command: {Message}", msg);
+          G.LogError(ex, "Failed to parse command: {Message}", msg);
         }
         catch (Exception ex)
         {
-          _logger.LogError(ex, "Error processing command");
+          G.LogError(ex, "Error processing command");
         }
       }
     }
@@ -56,7 +55,7 @@ public class CommandProcessor
     }
     catch (Exception ex)
     {
-      _logger.LogError(ex, "Fatal error in command processor");
+      G.LogError(ex, "Fatal error in command processor");
       throw;
     }
   }
@@ -81,7 +80,7 @@ public class CommandProcessor
       }
 
       // Execute handler
-      _logger.LogDebug(
+      G.LogDebug(
           "Processing command {Type} for {Target}",
           command.CommandType,
           command.TargetProcessId);
@@ -93,7 +92,7 @@ public class CommandProcessor
     }
     catch (Exception ex)
     {
-      _logger.LogError(
+      G.LogError(
           ex,
           "Failed to process command {Type} for {Target}",
           command.CommandType,
@@ -122,7 +121,7 @@ public class CommandProcessor
     }
     catch (Exception ex)
     {
-      _logger.LogError(ex, "Failed to send command response");
+      G.LogError(ex, "Failed to send command response");
     }
   }
 }

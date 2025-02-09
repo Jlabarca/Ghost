@@ -1,8 +1,8 @@
+using Ghost.Core.Monitoring;
+using Ghost.Core.PM;
 using Ghost.Core.Storage;
-using Ghost2.Infrastructure.Monitoring;
-using Ghost2.Infrastructure.ProcessManagement;
-using Microsoft.Extensions.Logging;
 using System.Text.Json;
+
 namespace Ghost.Father;
 
 /// <summary>
@@ -11,14 +11,12 @@ namespace Ghost.Father;
 public class StateManager
 {
     private readonly IGhostData _data;
-    private readonly ILogger _logger;
     private readonly SemaphoreSlim _lock = new(1, 1);
     private bool _initialized;
 
-    public StateManager(IGhostData data, ILogger logger)
+    public StateManager(IGhostData data)
     {
         _data = data;
-        _logger = logger;
     }
 
     public async Task InitializeAsync()
@@ -102,7 +100,7 @@ public class StateManager
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Failed to save process state: {Id}", process.Id);
+            G.LogError(ex, "Failed to save process state: {Id}", process.Id);
             throw;
         }
     }
@@ -126,7 +124,7 @@ public class StateManager
         }
         catch (Exception ex)
         {
-            _logger.LogError(
+            G.LogError(
                 ex, 
                 "Failed to update process status: {Id} -> {Status}", 
                 processId, 
@@ -184,7 +182,7 @@ public class StateManager
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Failed to update process metrics: {Id}", processId);
+            G.LogError(ex, "Failed to update process metrics: {Id}", processId);
             throw;
         }
     }
@@ -223,7 +221,7 @@ public class StateManager
         }
         catch (Exception ex)
         {
-            _logger.LogError(
+            G.LogError(
                 ex, 
                 "Failed to get process metrics: {Id} ({Start} -> {End})", 
                 processId, 
@@ -251,5 +249,21 @@ public class StateManager
         {
             await InitializeAsync();
         }
+    }
+    public async Task<IEnumerable<ProcessInfo>> GetActiveProcessesAsync()
+    {
+        return await _data.QueryAsync<ProcessInfo>(
+            "SELECT * FROM processes WHERE status = 'running'");
+    }
+    public async Task<ProcessInfo> GetProcessStatusAsync(string? processId)
+    {
+        if (string.IsNullOrWhiteSpace(processId))
+        {
+            return null;
+        }
+
+        return await _data.QuerySingleAsync<ProcessInfo>(
+            "SELECT * FROM processes WHERE id = @processId",
+            new { processId });
     }
 }

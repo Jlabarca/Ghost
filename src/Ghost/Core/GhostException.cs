@@ -1,4 +1,4 @@
-namespace Ghost.Infrastructure;
+namespace Ghost.Core;
 
 public enum ErrorCode
 {
@@ -26,7 +26,8 @@ public enum ErrorCode
     ProcessError,
     TemplateError,
     GitError,
-    TemplateNotFound
+    TemplateNotFound,
+    StorageConfigurationFailed
 }
 
 public class GhostException : Exception

@@ -1,7 +1,7 @@
 using System.Diagnostics;
 using System.Text.Json.Serialization;
 
-namespace Ghost.Infrastructure.ProcessManagement;
+namespace Ghost.Core.PM;
 
 public enum ProcessStatus
 {
@@ -19,13 +19,21 @@ public record ProcessMetadata(
     string Type,
     string Version,
     Dictionary<string, string> Environment,
-    Dictionary<string, string> Configuration);
+    Dictionary<string, string> Configuration
+);
 
 public class ProcessInfo : IAsyncDisposable
 {
-    // Basic Properties
+    // Identity
     public string Id { get; }
     public ProcessMetadata Metadata { get; }
+
+    // Process Info
+    public string ExecutablePath { get; }
+    public string Arguments { get; }
+    public string WorkingDirectory { get; }
+
+    // Status
     public ProcessStatus Status { get; private set; }
     public DateTime StartTime { get; private set; }
     public DateTime? StopTime { get; private set; }
@@ -35,11 +43,8 @@ public class ProcessInfo : IAsyncDisposable
     // Runtime Properties
     [JsonIgnore]
     public bool IsRunning => Status == ProcessStatus.Running;
-
     [JsonIgnore]
-    public TimeSpan Uptime => StopTime.HasValue
-        ? StopTime.Value - StartTime
-        : DateTime.UtcNow - StartTime;
+    public TimeSpan Uptime => StopTime.HasValue ? StopTime.Value - StartTime : DateTime.UtcNow - StartTime;
 
     // Private fields
     private Process? _process;
@@ -47,7 +52,7 @@ public class ProcessInfo : IAsyncDisposable
     private readonly SemaphoreSlim _lock = new(1, 1);
     private readonly List<string> _outputBuffer = new();
     private readonly List<string> _errorBuffer = new();
-    private const int MaxBufferSize = 1000;
+    private readonly int _maxBufferSize;
     private bool _isDisposed;
 
     // Events
@@ -55,24 +60,47 @@ public class ProcessInfo : IAsyncDisposable
     public event EventHandler<ProcessOutputEventArgs>? ErrorReceived;
     public event EventHandler<ProcessStatusEventArgs>? StatusChanged;
 
-    public ProcessInfo(string id, ProcessMetadata metadata, ProcessStartInfo startInfo)
+    public ProcessInfo(
+        string id,
+        ProcessMetadata metadata,
+        string executablePath,
+        string arguments,
+        string workingDirectory,
+        Dictionary<string, string> environment,
+        int maxBufferSize = 1000)
     {
         Id = id ?? throw new ArgumentNullException(nameof(id));
         Metadata = metadata ?? throw new ArgumentNullException(nameof(metadata));
-        _startInfo = startInfo ?? throw new ArgumentNullException(nameof(startInfo));
-        Status = ProcessStatus.Stopped;
+        ExecutablePath = executablePath ?? throw new ArgumentNullException(nameof(executablePath));
+        Arguments = arguments ?? string.Empty;
+        WorkingDirectory = workingDirectory ?? throw new ArgumentNullException(nameof(workingDirectory));
+        _maxBufferSize = maxBufferSize;
 
-        // Configure process startup settings
-        _startInfo.RedirectStandardOutput = true;
-        _startInfo.RedirectStandardError = true;
-        _startInfo.UseShellExecute = false;
-        _startInfo.CreateNoWindow = true;
+        _startInfo = new ProcessStartInfo
+        {
+            FileName = executablePath,
+            Arguments = arguments,
+            WorkingDirectory = workingDirectory,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            CreateNoWindow = true
+        };
 
-        // Add environment variables
+        // Add environment variables from constructor
+        foreach (var (key, value) in environment)
+        {
+            _startInfo.EnvironmentVariables[key] = value;
+        }
+
+        // Add environment variables from metadata
         foreach (var (key, value) in metadata.Environment)
         {
             _startInfo.EnvironmentVariables[key] = value;
         }
+
+        Status = ProcessStatus.Stopped;
+        G.LogDebug("Created ProcessInfo: {0} ({1})", Id, metadata.Name);
     }
 
     public async Task StartAsync()
@@ -80,36 +108,43 @@ public class ProcessInfo : IAsyncDisposable
         await _lock.WaitAsync();
         try
         {
-            if (_isDisposed)
-                throw new ObjectDisposedException(nameof(ProcessInfo));
-
+            if (_isDisposed) throw new ObjectDisposedException(nameof(ProcessInfo));
             if (Status == ProcessStatus.Running)
-                throw new InvalidOperationException("Process is already running");
+            {
+                G.LogWarn("Process already running: {0}", Id);
+                return;
+            }
 
             await UpdateStatusAsync(ProcessStatus.Starting);
 
-            _process = new Process { StartInfo = _startInfo };
-            ConfigureProcessCallbacks();
-
-            if (!_process.Start())
+            try
             {
-                throw new GhostException(
-                    $"Failed to start process {Id}",
-                    ErrorCode.ProcessStartFailed);
+                _process = new Process { StartInfo = _startInfo };
+                ConfigureProcessCallbacks();
+
+                if (!_process.Start())
+                {
+                    throw new GhostException(
+                        $"Failed to start process {Id}",
+                        ErrorCode.ProcessStartFailed);
+                }
+
+                StartTime = DateTime.UtcNow;
+                await UpdateStatusAsync(ProcessStatus.Running);
+
+                // Start reading output/error asynchronously
+                _process.BeginOutputReadLine();
+                _process.BeginErrorReadLine();
+
+                G.LogInfo("Started process: {0}", Id);
             }
-
-            StartTime = DateTime.UtcNow;
-            await UpdateStatusAsync(ProcessStatus.Running);
-
-            // Start reading output/error asynchronously
-            _process.BeginOutputReadLine();
-            _process.BeginErrorReadLine();
-        }
-        catch (Exception ex)
-        {
-            LastError = ex;
-            await UpdateStatusAsync(ProcessStatus.Failed);
-            throw;
+            catch (Exception ex)
+            {
+                LastError = ex;
+                await UpdateStatusAsync(ProcessStatus.Failed);
+                G.LogError("Failed to start process: {0}", ex, Id);
+                throw;
+            }
         }
         finally
         {
@@ -122,11 +157,11 @@ public class ProcessInfo : IAsyncDisposable
         await _lock.WaitAsync();
         try
         {
-            if (_isDisposed)
-                throw new ObjectDisposedException(nameof(ProcessInfo));
-
+            if (_isDisposed) throw new ObjectDisposedException(nameof(ProcessInfo));
             if (_process == null || Status == ProcessStatus.Stopped)
+            {
                 return;
+            }
 
             await UpdateStatusAsync(ProcessStatus.Stopping);
 
@@ -136,7 +171,6 @@ public class ProcessInfo : IAsyncDisposable
                 if (!_process.HasExited)
                 {
                     _process.CloseMainWindow();
-
                     if (!_process.WaitForExit((int)timeout.TotalMilliseconds))
                     {
                         // Force kill if necessary
@@ -146,11 +180,13 @@ public class ProcessInfo : IAsyncDisposable
 
                 StopTime = DateTime.UtcNow;
                 await UpdateStatusAsync(ProcessStatus.Stopped);
+                G.LogInfo("Stopped process: {0}", Id);
             }
             catch (Exception ex)
             {
                 LastError = ex;
                 await UpdateStatusAsync(ProcessStatus.Failed);
+                G.LogError("Failed to stop process: {0}", ex, Id);
                 throw new GhostException(
                     $"Failed to stop process {Id}",
                     ex,
@@ -168,6 +204,7 @@ public class ProcessInfo : IAsyncDisposable
         await StopAsync(timeout);
         await StartAsync();
         RestartCount++;
+        G.LogInfo("Restarted process: {0} (restart count: {1})", Id, RestartCount);
     }
 
     public async Task<Dictionary<string, string>> GetProcessInfoAsync()
@@ -222,8 +259,10 @@ public class ProcessInfo : IAsyncDisposable
                 lock (_outputBuffer)
                 {
                     _outputBuffer.Add(e.Data);
-                    if (_outputBuffer.Count > MaxBufferSize)
+                    while (_outputBuffer.Count > _maxBufferSize)
+                    {
                         _outputBuffer.RemoveAt(0);
+                    }
                 }
                 OutputReceived?.Invoke(this, new ProcessOutputEventArgs(e.Data));
             }
@@ -236,8 +275,10 @@ public class ProcessInfo : IAsyncDisposable
                 lock (_errorBuffer)
                 {
                     _errorBuffer.Add(e.Data);
-                    if (_errorBuffer.Count > MaxBufferSize)
+                    while (_errorBuffer.Count > _maxBufferSize)
+                    {
                         _errorBuffer.RemoveAt(0);
+                    }
                 }
                 ErrorReceived?.Invoke(this, new ProcessOutputEventArgs(e.Data));
             }
@@ -251,10 +292,12 @@ public class ProcessInfo : IAsyncDisposable
                     $"Process exited with code: {_process.ExitCode}",
                     ErrorCode.ProcessError);
                 await UpdateStatusAsync(ProcessStatus.Crashed);
+                G.LogError("Process crashed: {0} (exit code: {1})", Id, _process.ExitCode);
             }
             else
             {
                 await UpdateStatusAsync(ProcessStatus.Stopped);
+                G.LogInfo("Process exited normally: {0}", Id);
             }
         };
     }
@@ -264,8 +307,18 @@ public class ProcessInfo : IAsyncDisposable
         var oldStatus = Status;
         Status = newStatus;
 
-        StatusChanged?.Invoke(this, new ProcessStatusEventArgs(
-            Id, oldStatus, newStatus, DateTime.UtcNow));
+        try
+        {
+            StatusChanged?.Invoke(this, new ProcessStatusEventArgs(
+                Id,
+                oldStatus,
+                newStatus,
+                DateTime.UtcNow));
+        }
+        catch (Exception ex)
+        {
+            G.LogError("Error in status change handler: {0}", ex, Id);
+        }
     }
 
     public async ValueTask DisposeAsync()
@@ -287,9 +340,9 @@ public class ProcessInfo : IAsyncDisposable
                         _process.Kill(entireProcessTree: true);
                     }
                 }
-                catch
+                catch (Exception ex)
                 {
-                    // Best effort cleanup
+                    G.LogError("Error killing process during disposal: {0}", ex, Id);
                 }
                 finally
                 {
@@ -300,6 +353,8 @@ public class ProcessInfo : IAsyncDisposable
             _lock.Dispose();
             _outputBuffer.Clear();
             _errorBuffer.Clear();
+
+            G.LogDebug("Disposed ProcessInfo: {0}", Id);
         }
         finally
         {

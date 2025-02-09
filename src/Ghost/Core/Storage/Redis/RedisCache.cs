@@ -14,15 +14,12 @@ public class RedisCache : ICache, IMessageBus
   private readonly ConnectionMultiplexer _redis;
   private readonly IDatabase _db;
   private readonly ISubscriber _sub;
-  private readonly ILogger<RedisCache> _logger;
   private readonly SemaphoreSlim _lock;
   private readonly ConcurrentDictionary<string, List<ChannelMessageQueue>> _subscriptions;
   private bool _disposed;
 
-  public RedisCache(string connectionString, ILogger<RedisCache> logger)
+  public RedisCache(string connectionString)
   {
-    _logger = logger ?? throw new ArgumentNullException(nameof(logger));
-
     try
     {
       _redis = ConnectionMultiplexer.Connect(connectionString);
@@ -33,7 +30,7 @@ public class RedisCache : ICache, IMessageBus
     }
     catch (Exception ex)
     {
-      _logger.LogError(ex, "Failed to connect to Redis: {ConnectionString}", connectionString);
+      Console.Error.WriteLine($"Failed to connect to Redis: {ex.Message}");
       throw new StorageException(
           "Failed to connect to Redis",
           ex,
@@ -51,7 +48,7 @@ public class RedisCache : ICache, IMessageBus
     }
     catch (Exception ex)
     {
-      _logger.LogError(ex, "Redis connectivity check failed");
+      G.LogError(ex, "Redis connectivity check failed");
       return false;
     }
   }
@@ -72,7 +69,7 @@ public class RedisCache : ICache, IMessageBus
     }
     catch (Exception ex)
     {
-      _logger.LogError(ex, "Failed to get Redis memory usage");
+      G.LogError(ex, "Failed to get Redis memory usage");
       throw new StorageException(
           "Failed to get Redis memory usage",
           ex,
@@ -97,7 +94,7 @@ public class RedisCache : ICache, IMessageBus
     }
     catch (Exception ex)
     {
-      _logger.LogError(ex, "Failed to get value from Redis: {Key}", key);
+      G.LogError(ex, "Failed to get value from Redis: {Key}", key);
       throw new StorageException(
           $"Failed to get value from Redis: {key}",
           ex,
@@ -121,7 +118,7 @@ public class RedisCache : ICache, IMessageBus
     }
     catch (Exception ex)
     {
-      _logger.LogError(ex, "Failed to set value in Redis: {Key}", key);
+      G.LogError(ex, "Failed to set value in Redis: {Key}", key);
       throw new StorageException(
           $"Failed to set value in Redis: {key}",
           ex,
@@ -140,7 +137,7 @@ public class RedisCache : ICache, IMessageBus
     }
     catch (Exception ex)
     {
-      _logger.LogError(ex, "Failed to delete key from Redis: {Key}", key);
+      G.LogError(ex, "Failed to delete key from Redis: {Key}", key);
       throw new StorageException(
           $"Failed to delete key from Redis: {key}",
           ex,
@@ -159,7 +156,7 @@ public class RedisCache : ICache, IMessageBus
     }
     catch (Exception ex)
     {
-      _logger.LogError(ex, "Failed to check key existence in Redis: {Key}", key);
+      G.LogError(ex, "Failed to check key existence in Redis: {Key}", key);
       throw new StorageException(
           $"Failed to check key existence in Redis: {key}",
           ex,
@@ -178,7 +175,7 @@ public class RedisCache : ICache, IMessageBus
     }
     catch (Exception ex)
     {
-      _logger.LogError(ex, "Failed to increment value in Redis: {Key}", key);
+      G.LogError(ex, "Failed to increment value in Redis: {Key}", key);
       throw new StorageException(
           $"Failed to increment value in Redis: {key}",
           ex,
@@ -197,7 +194,7 @@ public class RedisCache : ICache, IMessageBus
     }
     catch (Exception ex)
     {
-      _logger.LogError(ex, "Failed to set expiry in Redis: {Key}", key);
+      G.LogError(ex, "Failed to set expiry in Redis: {Key}", key);
       throw new StorageException(
           $"Failed to set expiry in Redis: {key}",
           ex,
@@ -220,7 +217,7 @@ public class RedisCache : ICache, IMessageBus
     }
     catch (Exception ex)
     {
-      _logger.LogError(ex, "Failed to clear Redis database");
+      G.LogError(ex, "Failed to clear Redis database");
       throw new StorageException(
           "Failed to clear Redis database",
           ex,
@@ -239,7 +236,7 @@ public class RedisCache : ICache, IMessageBus
     }
     catch (Exception ex)
     {
-      _logger.LogError(ex, "Failed to publish message to Redis channel: {Channel}", channel);
+      G.LogError(ex, "Failed to publish message to Redis channel: {Channel}", channel);
       throw new StorageException(
           $"Failed to publish message to Redis channel: {channel}",
           ex,
@@ -316,7 +313,7 @@ public class RedisCache : ICache, IMessageBus
     }
     catch (Exception ex)
     {
-      _logger.LogError(ex, "Failed to get subscriber count for Redis channel: {Channel}", channel);
+      G.LogError(ex, "Failed to get subscriber count for Redis channel: {Channel}", channel);
       throw new StorageException(
           $"Failed to get subscriber count for Redis channel: {channel}",
           ex,
@@ -336,7 +333,7 @@ public class RedisCache : ICache, IMessageBus
     }
     catch (Exception ex)
     {
-      _logger.LogError(ex, "Failed to unsubscribe from Redis channel: {Channel}", channel);
+      G.LogError(ex, "Failed to unsubscribe from Redis channel: {Channel}", channel);
       throw new StorageException(
           $"Failed to unsubscribe from Redis channel: {channel}",
           ex,
@@ -381,5 +378,23 @@ public class RedisCache : ICache, IMessageBus
       _lock.Release();
       _lock.Dispose();
     }
+  }
+}
+
+/// <summary>
+/// Thread-safe queue for channel messages
+/// </summary>
+internal class ChannelMessageQueue
+{
+  private readonly ConcurrentQueue<string> _queue = new();
+
+  public void Enqueue(string message)
+  {
+    _queue.Enqueue(message);
+  }
+
+  public bool TryDequeue(out string message)
+  {
+    return _queue.TryDequeue(out message);
   }
 }

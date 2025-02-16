@@ -1,3 +1,4 @@
+using Ghost.Core.Data;
 using Microsoft.Extensions.Logging;
 using StackExchange.Redis;
 using System.Collections.Concurrent;

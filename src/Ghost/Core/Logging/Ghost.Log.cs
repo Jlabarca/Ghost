@@ -1,3 +1,4 @@
+using Ghost.Core.Data;
 using Ghost.Core.Storage.Cache;
 using Ghost.Infrastructure.Logging;
 using Microsoft.Extensions.Logging;
@@ -16,7 +17,7 @@ public static partial class G
   public static void Log(string message, LogLevel level = LogLevel.Information, Exception? ex = null)
   {
     EnsureInitialized();
-    _logger!.Log(message, level, ex);
+    _logger!.Log(level, ex, message);
   }
 
   public static void LogInfo(string message) => Log(message, LogLevel.Information);
@@ -57,6 +58,7 @@ public static partial class G
   {
     LogError(string.Format(message, args), ex);
   }
+
   public static void SetCache(ICache cache)
   {
     _logger.SetCache(cache);

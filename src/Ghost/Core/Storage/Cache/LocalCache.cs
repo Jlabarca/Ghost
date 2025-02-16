@@ -1,3 +1,4 @@
+using Ghost.Core.Data;
 using System.Collections.Concurrent;
 using System.Text.Json;
 using System.Security.Cryptography;

@@ -1,9 +1,12 @@
 using Ghost.Core;
 using Ghost.Core.Config;
+using Ghost.Core.Data;
+using Ghost.Core.Modules;
 using Ghost.Core.PM;
 using Ghost.Core.Storage;
 using System.Collections.Concurrent;
 using System.Text.Json;
+using ProcessInfo = Ghost.Core.PM.ProcessInfo;
 
 namespace Ghost.Father;
 
@@ -14,7 +17,7 @@ public class ProcessManager : IProcessManager, IAsyncDisposable
 {
     private readonly IGhostBus _bus;
     private readonly IGhostData _data;
-    private readonly IGhostConfig _config;
+    private readonly GhostConfig _config;
     private readonly ConcurrentDictionary<string, ProcessInfo> _processes;
     private readonly SemaphoreSlim _lock = new(1, 1);
     private readonly HealthMonitor _healthMonitor;
@@ -29,7 +32,7 @@ public class ProcessManager : IProcessManager, IAsyncDisposable
     public ProcessManager(
         IGhostBus bus,
         IGhostData data,
-        IGhostConfig config,
+        GhostConfig config,
         HealthMonitor healthMonitor,
         StateManager stateManager)
     {
@@ -59,7 +62,7 @@ public class ProcessManager : IProcessManager, IAsyncDisposable
             {
                 _processes[state.Id] = state;
                 await _healthMonitor.RegisterProcessAsync(state);
-                G.LogInfo("Loaded process state: {Id} ({Status})", state.Id, state.Status);
+                G.LogInfo("Loaded process state: {0} ({1})", state.Id, state.Status);
             }
 
             // Start health monitoring
@@ -68,7 +71,7 @@ public class ProcessManager : IProcessManager, IAsyncDisposable
             // Subscribe to system events
             _ = SubscribeToSystemEventsAsync();
 
-            G.LogInfo("Process manager initialized with {Count} processes", _processes.Count);
+            G.LogInfo("Process manager initialized with {0} processes", _processes.Count);
         }
         catch (Exception ex)
         {
@@ -199,7 +202,7 @@ public class ProcessManager : IProcessManager, IAsyncDisposable
             }
 
             // Load process configuration
-            var config = await _config.GetAsync<ProcessConfig>($"processes:{id}");
+            var config = _config.GetModuleConfig<ProcessConfig>($"processes:{id}");
 
             // Configure environment from config if provided
             if (config?.Environment != null)
@@ -371,8 +374,8 @@ public class ProcessManager : IProcessManager, IAsyncDisposable
             await _stateManager.SaveProcessAsync(process);
 
             // Check auto-restart configuration
-            var config = await _config.GetAsync<ProcessConfig>($"processes:{processId}");
-            if (config?.AutoRestart == true)
+            var config = _config.GetModuleConfig<ProcessConfig>($"processes:{processId}");
+            if (config.AutoRestart == true)
             {
                 G.LogInfo("Auto-restarting crashed process: {Id}", processId);
                 await Task.Delay(config.RestartDelayMs);
@@ -393,7 +396,6 @@ public class ProcessManager : IProcessManager, IAsyncDisposable
         try
         {
             if (_disposed) return;
-            _disposed = true;
 
             // Stop all processes
             var stopTasks = _processes.Values
@@ -411,24 +413,88 @@ public class ProcessManager : IProcessManager, IAsyncDisposable
 
             _processes.Clear();
             _lock.Dispose();
+            _disposed = true;
 
             G.LogInfo("Process manager disposed");
         }
         finally
         {
-            _lock.Release();
+            if (!_disposed)
+            {
+                _lock.Release();
+            }
         }
     }
     public async Task<object> GetProcessStatusAsync(string? processId)
     {
         return await _stateManager.GetProcessStatusAsync(processId);
     }
+    public async Task StopAllAsync()
+    {
+        var runningProcesses = _processes.Values
+            .Where(p => p.Status == ProcessStatus.Running)
+            .ToList();
+
+        foreach (var process in runningProcesses)
+        {
+            await process.StopAsync(_shutdownTimeout);
+            await _stateManager.SaveProcessAsync(process);
+        }
+    }
+    public async Task MaintenanceTickAsync()
+    {
+        await _lock.WaitAsync();
+        try
+        {
+            var runningProcesses = _processes.Values
+                .Where(p => p.Status == ProcessStatus.Running)
+                .ToList();
+
+            foreach (var process in runningProcesses)
+            {
+                // we supposedly already did a bunch of health checks (await _healthMonitor.CheckHealthAsync(process))
+                // so here we try to take action based on the health of the process
+                switch (process.Status)
+                {
+
+                    case ProcessStatus.Starting:
+                    case ProcessStatus.Running:
+                        continue;
+                    case ProcessStatus.Stopping:
+                    case ProcessStatus.Stopped:
+                        G.LogDebug("Process is healthy: {Id} ({Name})", process.Id, process.Metadata.Name);
+                        continue;
+
+                    case ProcessStatus.Failed:
+                    case ProcessStatus.Crashed:
+                    case ProcessStatus.Warning:
+                        break;
+                    default:
+                        throw new ArgumentOutOfRangeException();
+                }
+
+                G.LogWarn("Process is unhealthy: {Id} ({Name})", process.Id, process.Metadata.Name);
+
+                // Attempt to restart process
+                await process.RestartAsync(_shutdownTimeout);
+                await _stateManager.SaveProcessAsync(process);
+            }
+        }
+        catch (Exception ex)
+        {
+            G.LogError(ex, "Error during maintenance tick");
+        }
+        finally
+        {
+            _lock.Release();
+        }
+    }
 }
 
 /// <summary>
 /// Process configuration model
 /// </summary>
-public class ProcessConfig
+public class ProcessConfig : ModuleConfig
 {
     public bool AutoRestart { get; set; } = true;
     public int RestartDelayMs { get; set; } = 5000;

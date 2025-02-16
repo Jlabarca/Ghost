@@ -29,8 +29,8 @@ graph TB
 
     subgraph SDK["SDK Layer" style="fill:#3c6e71"]
         SDK1["GhostApp"]
-        SDK2["GhostServiceApp"]
-        SDK3["GhostAppBase"]
+        SDK2["Lifecycle Hooks"]
+        SDK3["Service Mode"]
     end
 
     subgraph Core["Core Services" style="fill:#284b63"]
@@ -52,13 +52,12 @@ graph TB
     end
 
     CLI1 --> SDK1
-    CLI1 --> SDK2
+    SDK1 --> SDK2
     SDK1 --> SDK3
-    SDK2 --> SDK3
-    SDK3 --> C1
-    SDK3 --> C2
-    SDK3 --> C3
-    SDK3 --> C4
+    SDK1 --> C1
+    SDK1 --> C2
+    SDK1 --> C3
+    SDK1 --> C4
     C1 --> S2
     C2 --> S1
     C3 --> S2
@@ -149,7 +148,7 @@ ghost monitor MyApp
 
 ## 🔌 SDK Usage
 
-Create a simple Ghost application:
+Create a simple one-off Ghost application:
 
 ```csharp
 public class MyApp : GhostApp
@@ -166,16 +165,33 @@ public class MyApp : GhostApp
 Create a long-running Ghost service:
 
 ```csharp
-public class MyService : GhostServiceApp
+public class MyService : GhostApp
 {
-    protected override async Task ExecuteAsync(CancellationToken ct)
+    public MyService()
     {
-        while (!ct.IsCancellationRequested)
-        {
-            // Your service logic here
-            await Task.Delay(1000, ct);
-            Ghost.LogInfo("Service heartbeat");
-        }
+        // Configure as service
+        IsService = true;
+        TickInterval = TimeSpan.FromSeconds(1);
+        AutoRestart = true;
+    }
+
+    public override async Task RunAsync()
+    {
+        // Initial setup
+        Ghost.LogInfo("Service starting...");
+    }
+
+    protected override async Task OnTickAsync()
+    {
+        // Regular service work
+        Ghost.LogInfo("Service heartbeat");
+        await ProcessWorkItems();
+    }
+
+    protected override async Task OnAfterRunAsync()
+    {
+        // Cleanup
+        Ghost.LogInfo("Service shutting down...");
     }
 }
 ```

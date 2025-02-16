@@ -1,13 +1,12 @@
-using Ghost.Core.Storage.Database;
+using Ghost.Core.Data;
 using System.Data;
-using Npgsql;
 
 namespace Ghost.Core.Storage;
 
 public static class PostgresBulkExtensions
 {
   public static async Task<int> BulkCopyAsync(
-      this PostgresClient client,
+      this PostgresDatabase client,
       DataTable data,
       string tableName)
   {

@@ -1,12 +1,14 @@
 using System.Data;
 using Dapper;
-using Ghost.Core.Storage.Database;
+using Ghost.Core.Data;
+using System.ComponentModel.DataAnnotations.Schema;
 using System.Reflection;
 
 namespace Ghost.Core.Storage;
 
 /// <summary>
 /// Extension methods for bulk operations
+/// TODO design system to do Single, Batch, Bulk, where Bulk are batches that accumulate entries for some time before executing
 /// </summary>
 public static class BulkOperationExtensions
 {
@@ -180,7 +182,7 @@ public static class BulkOperationExtensions
                     throw new InvalidOperationException("Invalid database client type");
 
                 var dbClient = ghostData.GetDatabaseClient();
-                if (dbClient is not PostgresClient postgresClient)
+                if (dbClient is not PostgresDatabase postgresClient)
                     throw new InvalidOperationException("Invalid database client type");
 
                 return await postgresClient.BulkCopyAsync(data, tableName);

@@ -1,3 +1,4 @@
+using Ghost.Core.Data;
 using System.Collections.Concurrent;
 using System.Runtime.CompilerServices;
 using System.Text.Json;
@@ -16,6 +17,7 @@ public interface IGhostBus : IAsyncDisposable
     Task<long> GetSubscriberCountAsync(string channel);
     Task<IEnumerable<string>> GetActiveChannelsAsync();
     Task ClearChannelAsync(string channel);
+    Task<bool> IsAvailableAsync();
 }
 
 /// <summary>
@@ -226,6 +228,10 @@ public class GhostBus : IGhostBus
                 ex,
                 ErrorCode.StorageOperationFailed);
         }
+    }
+    public Task<bool> IsAvailableAsync()
+    {
+        return Task.FromResult(true);
     }
 
     public async ValueTask DisposeAsync()

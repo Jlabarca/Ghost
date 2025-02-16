@@ -1,4 +1,5 @@
 using Ghost.Core.Config;
+using Ghost.Core.Data;
 using Ghost.Core.Storage;
 using Ghost.Father;
 using Ghost.SDK;
@@ -12,7 +13,7 @@ public static partial class G
 
     public static IGhostBus Bus => GetCurrent().Bus;
     public static IGhostData Data => GetCurrent().Data;
-    public static IGhostConfig Config => GetCurrent().Config;
+    public static GhostConfig Config => GetCurrent().Config;
     public static IAutoMonitor Metrics => GetCurrent().Metrics;
 
     private static GhostAppBase GetCurrent()

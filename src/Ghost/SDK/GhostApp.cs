@@ -1,49 +1,228 @@
+using Ghost.Core;
 using Ghost.Core.Config;
+
 namespace Ghost.SDK;
 
 /// <summary>
-/// Base class for one-off Ghost apps that run and exit
-/// Think of this as a "task runner" - it does its job and finishes
+/// Base class for Ghost apps that supports both one-off tasks and long-running services.
 /// </summary>
 public abstract class GhostApp : GhostAppBase
 {
-  protected GhostApp(GhostOptions options = null) : base(options) { }
+    private readonly SemaphoreSlim _runLock = new(1, 1);
+    private bool _isRunning;
+    private bool _hasRun;
+    private readonly Timer? _tickTimer;
+    private readonly TaskCompletionSource _stopSource = new();
 
-  /// <summary>
-  /// Main execution method for the app. Override this to implement your app's logic.
-  /// </summary>
-  public abstract Task RunAsync();
+    // Service configuration
+    protected TimeSpan TickInterval { get; set; } = TimeSpan.FromSeconds(1);
+    protected bool IsService { get; set; }
+    protected bool AutoRestart { get; set; }
+    protected int MaxRestartAttempts { get; set; } = 3;
+    protected TimeSpan RestartDelay { get; set; } = TimeSpan.FromSeconds(5);
 
-  /// <summary>
-  /// Runs a Ghost app of the specified type
-  /// </summary>
-  public static async Task RunAsync<T>(GhostOptions options = null) where T : GhostApp
-  {
-    await using var app = (T)Activator.CreateInstance(typeof(T), options);
-    try
+    protected GhostApp(GhostConfig config = null) : base(config)
     {
-      await app.InitializeAsync();
-      await app.RunAsync();
+        G.SetCurrent(this);
+        if (IsService)
+        {
+            _tickTimer = new Timer(OnTickCallback, null, Timeout.InfiniteTimeSpan, Timeout.InfiniteTimeSpan);
+        }
     }
-    finally
-    {
-      await app.ShutdownAsync();
-    }
-  }
 
-  /// <summary>
-  /// Runs a Ghost app of the specified type with explicit error handling
-  /// </summary>
-  public static async Task<bool> TryRunAsync<T>(GhostOptions options = null) where T : GhostApp
-  {
-    try
+    /// <summary>
+    /// Main execution method. For one-off apps, this runs once.
+    /// For services, this sets up any initial state before ticking begins.
+    /// </summary>
+    public abstract Task RunAsync();
+
+    /// <summary>
+    /// Optional service tick method. Override this to implement service behavior.
+    /// </summary>
+    protected virtual Task OnTickAsync()
     {
-      await RunAsync<T>(options);
-      return true;
+        return Task.CompletedTask;
     }
-    catch (Exception)
+
+    /// <summary>
+    /// Called before RunAsync(). Override to add initialization logic.
+    /// </summary>
+    protected virtual Task OnBeforeRunAsync()
     {
-      return false;
+        return Task.CompletedTask;
     }
-  }
+
+    /// <summary>
+    /// Called after RunAsync() or when service stops. Override to add cleanup logic.
+    /// </summary>
+    protected virtual Task OnAfterRunAsync()
+    {
+        return Task.CompletedTask;
+    }
+
+    /// <summary>
+    /// Called if an error occurs. Override to add custom error handling.
+    /// </summary>
+    protected virtual Task OnErrorAsync(Exception ex)
+    {
+        G.LogError(ex, "Error in {Type}", GetType().Name);
+        return Task.CompletedTask;
+    }
+
+    private async void OnTickCallback(object? state)
+    {
+        try
+        {
+            await OnTickAsync();
+        }
+        catch (Exception ex)
+        {
+            await OnErrorAsync(ex);
+            if (AutoRestart && MaxRestartAttempts > 0)
+            {
+                MaxRestartAttempts--;
+                G.LogWarn("Restarting service after error ({Attempts} attempts remaining)", MaxRestartAttempts);
+                await Task.Delay(RestartDelay);
+                await StartServiceAsync();
+            }
+            else
+            {
+                G.LogError("Service stopped due to error");
+                await StopAsync();
+            }
+        }
+    }
+
+    private async Task StartServiceAsync()
+    {
+        if (IsService && _tickTimer != null)
+        {
+            _tickTimer.Change(TimeSpan.Zero, TickInterval);
+            G.LogInfo("Service started with {Interval}ms tick interval", TickInterval.TotalMilliseconds);
+        }
+    }
+
+    /// <summary>
+    /// Executes the app with lifecycle management
+    /// </summary>
+    public async Task<bool> ExecuteAsync()
+    {
+        await _runLock.WaitAsync();
+        try
+        {
+            if (_hasRun && !IsService)
+                throw new InvalidOperationException("One-off app can only be run once");
+
+            if (_isRunning)
+                throw new InvalidOperationException("App is already running");
+
+            _isRunning = true;
+            _hasRun = true;
+
+            await InitializeAsync();
+            G.LogInfo("Starting {Type}", GetType().Name);
+
+            try
+            {
+                await OnBeforeRunAsync();
+                await RunAsync();
+
+                if (IsService)
+                {
+                    await StartServiceAsync();
+                    await _stopSource.Task; // Wait for stop signal
+                }
+
+                await OnAfterRunAsync();
+                G.LogInfo("{Type} completed successfully", GetType().Name);
+                return true;
+            }
+            catch (Exception ex)
+            {
+                await OnErrorAsync(ex);
+                throw new GhostException(
+                    $"App execution failed: {GetType().Name}",
+                    ex,
+                    ErrorCode.ProcessError
+                );
+            }
+            finally
+            {
+                _isRunning = false;
+                await ShutdownAsync();
+            }
+        }
+        finally
+        {
+            _runLock.Release();
+        }
+    }
+
+    /// <summary>
+    /// Stops a running service
+    /// </summary>
+    public virtual async Task StopAsync()
+    {
+        if (!_isRunning || !IsService) return;
+
+        await _runLock.WaitAsync();
+        try
+        {
+            if (_tickTimer != null)
+            {
+                await _tickTimer.DisposeAsync();
+            }
+            _stopSource.TrySetResult();
+            G.LogInfo("Service stopped");
+        }
+        finally
+        {
+            _runLock.Release();
+        }
+    }
+    public override async ValueTask DisposeAsync()
+    {
+        await _runLock.WaitAsync();
+        try
+        {
+            if (_isRunning)
+            {
+                await StopAsync();
+            }
+            if (_tickTimer != null)
+            {
+                await _tickTimer.DisposeAsync();
+            }
+            await base.DisposeAsync();
+        }
+        finally
+        {
+            _runLock.Release();
+            _runLock.Dispose();
+        }
+    }
+
+    // Static helper methods
+    public static async Task RunAsync<T>(GhostConfig config = null) where T : GhostApp
+    {
+        await using var app = (T)Activator.CreateInstance(typeof(T), config);
+        await app.ExecuteAsync();
+    }
+
+    public static async Task<bool> TryRunAsync<T>(
+        GhostConfig config = null,
+        Action<Exception> onError = null
+    ) where T : GhostApp
+    {
+        try
+        {
+            await using var app = (T)Activator.CreateInstance(typeof(T), config);
+            return await app.ExecuteAsync();
+        }
+        catch (Exception ex)
+        {
+            onError?.Invoke(ex);
+            return false;
+        }
+    }
 }

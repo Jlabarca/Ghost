@@ -1,7 +1,7 @@
-using Ghost.Core.Storage;
+using Ghost.Core.Config;
 using Microsoft.Extensions.Logging;
 using System.Collections.Concurrent;
-namespace Ghost.Core.Config.Ghost.Core.Config.Ghost.Core.Config.Ghost.Core;
+namespace Ghost.Core.Data;
 
 /// <summary>
 /// Main implementation of state management with persistence and change tracking
@@ -309,15 +309,4 @@ public interface IGhostState : IAsyncDisposable
   Task<bool> ExistsAsync(string key);
   Task<IEnumerable<StateEntry>> GetHistoryAsync(string key, int limit = 10);
   event EventHandler<StateChangedEventArgs> StateChanged;
-}
-
-/// <summary>
-/// Represents a state entry with metadata
-/// </summary>
-public class StateEntry
-{
-  public string Key { get; set; }
-  public object Value { get; set; }
-  public StateChangeType ChangeType { get; set; }
-  public DateTime Timestamp { get; set; }
 }

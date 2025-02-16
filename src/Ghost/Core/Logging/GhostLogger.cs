@@ -1,4 +1,4 @@
-using Ghost.Core.Storage.Cache;
+using Ghost.Core.Data;
 using Microsoft.Extensions.Logging;
 using Spectre.Console;
 using System.Collections.Concurrent;
@@ -46,24 +46,47 @@ public class GhostLogger : ILogger
     {
         return logLevel >= _config.LogLevel;
     }
+
     public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter)
     {
         if (!IsEnabled(logLevel))
             return;
 
-        var message = formatter(state, exception);
-        Log(message, logLevel, exception);
+        string message = formatter(state, exception);
+        string sourceFile = "";
+        int sourceLine = 0;
+
+        // Extract source info if available
+        if (state is ILogState logState)
+        {
+            sourceFile = logState.SourceFilePath;
+            sourceLine = logState.SourceLineNumber;
+        }
+
+        LogInternal(message, logLevel, exception, sourceFile, sourceLine);
     }
 
-    public void Log(string message,
-            LogLevel level,
-            Exception? exception = null,
-            [CallerFilePath] string sourceFilePath = "",
-            [CallerLineNumber] int sourceLineNumber = 0)
+    // Use this method for direct logging
+    public void LogWithSource(
+        string message,
+        LogLevel level = LogLevel.Information,
+        Exception? exception = null,
+        [CallerFilePath] string sourceFilePath = "",
+        [CallerLineNumber] int sourceLineNumber = 0)
     {
         if (!IsEnabled(level))
             return;
 
+        LogInternal(message, level, exception, sourceFilePath, sourceLineNumber);
+    }
+
+    private void LogInternal(
+        string message,
+        LogLevel level,
+        Exception? exception,
+        string sourceFilePath,
+        int sourceLineNumber)
+    {
         var entry = new LogEntry
         {
             Timestamp = DateTime.UtcNow,
@@ -75,25 +98,32 @@ public class GhostLogger : ILogger
             SourceLineNumber = sourceLineNumber
         };
 
-        // Log to console with Spectre formatting
+        // Log to console with formatting
         LogToConsole(entry);
+
+        // Explicitly write exception if present
+        if (exception != null)
+        {
+            AnsiConsole.WriteLine();
+            AnsiConsole.WriteException(exception);
+            AnsiConsole.WriteLine();
+        }
 
         _logLock.Wait();
         try
         {
-            // Log to Redis (GhostLogs system)
+            // Log to Redis if available
             if (_cache != null)
             {
                 LogToRedis(entry);
             }
 
-            // Log to file if it's process output
+            // Log to appropriate files
             if (level == LogLevel.Information)
             {
                 LogToOutputFile(entry);
             }
 
-            // Also log errors and critical messages to error file
             if (level >= LogLevel.Error)
             {
                 LogToErrorFile(entry);
@@ -107,46 +137,64 @@ public class GhostLogger : ILogger
         }
     }
 
+    private interface ILogState
+    {
+        string SourceFilePath { get; }
+        int SourceLineNumber { get; }
+    }
+
+    private class SourceLogState<T> : ILogState
+    {
+        public T State { get; }
+        public string SourceFilePath { get; }
+        public int SourceLineNumber { get; }
+
+        public SourceLogState(T state, string sourceFilePath, int sourceLineNumber)
+        {
+            State = state;
+            SourceFilePath = sourceFilePath;
+            SourceLineNumber = sourceLineNumber;
+        }
+    }
+
     private void LogToConsole(LogEntry entry)
     {
         var color = LogLevelColors.GetValueOrDefault(entry.Level, Color.White);
         var timestamp = entry.Timestamp.ToString("HH:mm:ss.fff");
         var logLevel = entry.Level.ToString().ToUpper().PadRight(9);
 
-        // Build the location info if enabled
-        var locationInfo = "";
-        // if (_config.ShowSourceLocation && !string.IsNullOrEmpty(entry.SourceFilePath))
-        // {
-        //     var fileName = Path.GetFileName(entry.SourceFilePath);
-        //     locationInfo = $"{fileName}:{entry.SourceLineNumber}";
-        // }
+        // Format file path as a clickable link
+        string clickableFilePath = FormatClickableFilePath(entry.SourceFilePath, entry.SourceLineNumber);
+        var logMessage = $"{timestamp} {logLevel} {entry.Message} {clickableFilePath}";
 
-        // Create a clean single-line log message
-        var logMessage = $"{timestamp} {logLevel} {locationInfo}{entry.Message}";
-
-        // Apply colors using style instead of markup
-        AnsiConsole.Write(new Text(logMessage, new Style(
-            foreground: entry.Level switch
-            {
-                LogLevel.Trace => Color.Grey,
-                LogLevel.Debug => Color.Blue,
-                LogLevel.Information => Color.Green,
-                LogLevel.Warning => Color.Yellow,
-                LogLevel.Error => Color.Red,
-                LogLevel.Critical => Color.Red1,
-                _ => Color.White
-            })));
-
+        AnsiConsole.Write(new Text(logMessage, new Style(foreground: color)));
         AnsiConsole.WriteLine();
+    }
 
-        // If there's an exception, display it on the next line with proper formatting
-        if (entry.Exception != null)
+    private string FormatClickableFilePath(string filePath, int lineNumber)
+    {
+        if (string.IsNullOrWhiteSpace(filePath))
+            return "";
+
+        string fileName = Path.GetFileName(filePath);
+        if (IsRiderInstalled())
         {
-            AnsiConsole.Write(new Panel(entry.Exception)
-                .BorderColor(color)
-                .RoundedBorder()
-                .Padding(1, 1, 1, 1));
+            return $"\u001b]8;;rider://open/?file={filePath.Replace("\\", "/")}&{lineNumber}\u001b\\{fileName}:{lineNumber}\u001b]8;;\u001b\\";
         }
+        else
+        {
+            return $"\u001b]8;;file:///{filePath.Replace("\\", "/")}\u001b\\{fileName}:{lineNumber}\u001b]8;;\u001b\\";
+        }
+    }
+
+    private bool IsRiderInstalled()
+    {
+        string jetBrainsPath = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            "JetBrains"
+        );
+        return Directory.Exists(jetBrainsPath) &&
+               Directory.GetFiles(jetBrainsPath, "Rider*.exe", SearchOption.AllDirectories).Any();
     }
 
     private async void LogToRedis(LogEntry entry)
@@ -167,7 +215,6 @@ public class GhostLogger : ILogger
         catch
         {
             // Redis failure shouldn't affect the application
-            // Logs will still be written to files
         }
     }
 
@@ -251,22 +298,4 @@ public class GhostLogger : ILogger
     }
 
     private static readonly ConcurrentDictionary<string, DateTime> LastCleanupTime = new();
-}
-
-public static class LoggerExtensions
-{
-    public static void LogWithCaller(
-            this ILogger logger,
-            LogLevel logLevel,
-            string message,
-            [CallerLineNumber] int lineNumber = 0,
-            [CallerFilePath] string filePath = "")
-    {
-        logger.Log(
-                logLevel,
-                new EventId(0),
-                $"[{Path.GetFileName(filePath)}:{lineNumber}] {message}",
-                null,
-                (state, ex) => state.ToString()!);
-    }
 }

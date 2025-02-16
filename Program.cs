@@ -1,4 +1,5 @@
 using Ghost.Core;
+using Spectre.Console;
 
 namespace Ghost;
 
@@ -15,8 +16,8 @@ public class Program
     }
     catch (Exception ex)
     {
-      await Console.Error.WriteLineAsync($"Fatal error: {ex.Message}");
-      return 1;
+      AnsiConsole.WriteException(ex, ExceptionFormats.ShortenEverything | ExceptionFormats.ShowLinks);
+      return -1;
     }
   }
 

@@ -1,3 +1,4 @@
+using Ghost.Core.Monitoring;
 using Ghost.Core.PM;
 namespace Ghost.Core.Data;
 

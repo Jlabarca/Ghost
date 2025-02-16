@@ -30,7 +30,7 @@ public static partial class G
 
             // Create and run daemon
             var daemon = new GhostFatherDaemon(config);
-            await daemon.RunAsync();
+            await daemon.RunAsync(args);
 
             // Wait for shutdown signal
             var cts = new CancellationTokenSource();
@@ -82,7 +82,7 @@ public static partial class G
 
             // Create and run CLI
             var cli = new GhostFatherCLI(config);
-            await cli.RunAsync(); //TODO: pass args and config
+            await cli.RunAsync(args); //TODO: pass args and config
         }
         catch (Exception ex)
         {

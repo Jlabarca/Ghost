@@ -24,7 +24,9 @@ public static partial class G
   public static void LogDebug(string message) => Log(message, LogLevel.Debug);
   public static void LogWarn(string message) => Log(message, LogLevel.Warning);
   public static void LogError(string message, Exception? ex = null) => Log(message, LogLevel.Error, ex);
-  public static void LogCritical(string message, Exception? ex = null) => Log(message, LogLevel.Critical, ex);
+  public static void LogError(Exception? ex = null) => Log(ex.Message, LogLevel.Error, ex);
+  public static void LogCritical(string message, Exception? ex) => Log(message, LogLevel.Critical, ex);
+  public static void LogCritical(Exception? ex) => Log(ex.Message, LogLevel.Critical, ex);
 
   private static void EnsureInitialized()
   {

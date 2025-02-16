@@ -105,7 +105,7 @@ public class GhostLogger : ILogger
         if (exception != null)
         {
             AnsiConsole.WriteLine();
-            AnsiConsole.WriteException(exception);
+            AnsiConsole.WriteException(exception, ExceptionFormats.ShortenEverything | ExceptionFormats.ShowLinks);
             AnsiConsole.WriteLine();
         }
 

@@ -30,7 +30,7 @@ public class GhostFatherDaemon : GhostApp
         _stateManager = new StateManager(Data);
     }
 
-    public override async Task RunAsync()
+    public override async Task RunAsync(IEnumerable<string> args)
     {
         G.LogInfo("GhostFather starting...");
 

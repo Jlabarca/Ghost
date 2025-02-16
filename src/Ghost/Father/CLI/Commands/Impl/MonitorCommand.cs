@@ -2,17 +2,34 @@ using Ghost.Core.Monitoring;
 using Ghost.Core.Storage;
 using Spectre.Console;
 using Spectre.Console.Cli;
+using System.ComponentModel;
 using System.Diagnostics;
 
 namespace Ghost.Father.CLI.Commands;
 
-public class MonitorCommand : AsyncCommand
+public class MonitorCommand : AsyncCommand<MonitorCommand.Settings>
 {
     private readonly IGhostBus _bus;
     private readonly Table _processTable;
     private readonly Table _systemTable;
     private readonly Dictionary<string, ProcessMetrics> _lastMetrics = new();
     private bool _watching;
+
+    public class Settings : CommandSettings
+    {
+        [CommandOption("--refresh")]
+        [Description("Refresh interval in seconds")]
+        [DefaultValue(5)]
+        public int RefreshInterval { get; set; }
+
+        [CommandOption("--no-clear")]
+        [Description("Don't clear the screen between updates")]
+        public bool NoClear { get; set; }
+
+        [CommandOption("--process")]
+        [Description("Monitor specific process")]
+        public string? ProcessId { get; set; }
+    }
 
     public MonitorCommand(IGhostBus bus)
     {
@@ -39,12 +56,12 @@ public class MonitorCommand : AsyncCommand
             .AddColumn("[grey]Info[/]");
     }
 
-    public override async Task<int> ExecuteAsync(CommandContext context)
+    public override async Task<int> ExecuteAsync(CommandContext context, Settings settings)
     {
         try
         {
             _watching = true;
-            AnsiConsole.Clear();
+            if (!settings.NoClear) AnsiConsole.Clear();
 
             // Create layout
             var layout = new Layout("Root")
@@ -60,9 +77,8 @@ public class MonitorCommand : AsyncCommand
                 .Cropping(VerticalOverflowCropping.Bottom)
                 .StartAsync(async ctx =>
                 {
-                    Task systemTask = MonitorSystemStatusAsync(ctx);
-                    Task processTask = MonitorProcessesAsync(ctx);
-
+                    Task systemTask = MonitorSystemStatusAsync(ctx, settings);
+                    Task processTask = MonitorProcessesAsync(ctx, settings);
                     await Task.WhenAll(systemTask, processTask);
                 });
 
@@ -79,7 +95,7 @@ public class MonitorCommand : AsyncCommand
         }
     }
 
-    private async Task MonitorSystemStatusAsync(LiveDisplayContext ctx)
+    private async Task MonitorSystemStatusAsync(LiveDisplayContext ctx, Settings settings)
     {
         while (_watching)
         {
@@ -87,44 +103,28 @@ public class MonitorCommand : AsyncCommand
             {
                 UpdateSystemTable();
                 ctx.Refresh();
-                await Task.Delay(5000); // Update every 5 seconds
+                await Task.Delay(settings.RefreshInterval * 1000);
             }
             catch (Exception ex)
             {
                 G.LogError("Error updating system status", ex);
+                if (!settings.NoClear) AnsiConsole.Clear();
+                AnsiConsole.MarkupLine($"[red]Error updating system status:[/] {ex.Message}");
+                await Task.Delay(5000); // Wait before retrying
             }
         }
     }
 
-    private void UpdateSystemTable()
-    {
-        _systemTable.Rows.Clear();
-
-        // Check GhostFather Daemon
-        bool isDaemonRunning = IsDaemonRunning();
-        string daemonStatus = isDaemonRunning ? "[green]Running[/]" : "[red]Stopped[/]";
-
-        // Check Installation
-        var (isInstalled, installInfo) = CheckInstallation();
-        string installStatus = isInstalled ? "[green]Installed[/]" : "[yellow]Partial[/]";
-
-        // Check CLI
-        bool isCliAccessible = IsCliAccessible();
-        string cliStatus = isCliAccessible ? "[green]Available[/]" : "[red]Not Found[/]";
-
-        _systemTable.AddRow("GhostFather Daemon", daemonStatus, GetDaemonInfo());
-        _systemTable.AddRow("Installation", installStatus, installInfo);
-        _systemTable.AddRow("CLI", cliStatus, GetCliInfo());
-    }
-
-    private async Task MonitorProcessesAsync(LiveDisplayContext ctx)
+    private async Task MonitorProcessesAsync(LiveDisplayContext ctx, Settings settings)
     {
         try
         {
-            // Subscribe to metrics
-            await foreach (var metrics in _bus.SubscribeAsync<ProcessMetrics>("ghost:metrics"))
+            var filter = settings.ProcessId != null ? $"ghost:metrics:{settings.ProcessId}" : "ghost:metrics:#";
+
+            await foreach (var metrics in _bus.SubscribeAsync<ProcessMetrics>(filter))
             {
                 if (!_watching) break;
+
                 UpdateProcessTable(metrics);
                 ctx.Refresh();
             }
@@ -132,7 +132,35 @@ public class MonitorCommand : AsyncCommand
         catch (Exception ex)
         {
             G.LogError("Error monitoring processes", ex);
+            if (!settings.NoClear) AnsiConsole.Clear();
+            AnsiConsole.MarkupLine($"[red]Error monitoring processes:[/] {ex.Message}");
         }
+    }
+
+    private void UpdateSystemTable()
+    {
+        _systemTable.Rows.Clear();
+
+        // System metrics
+        var process = Process.GetCurrentProcess();
+        _systemTable.AddRow(
+            "CPU",
+            $"{process.TotalProcessorTime.TotalSeconds:F1}s",
+            $"Threads: {process.Threads.Count}"
+        );
+
+        _systemTable.AddRow(
+            "Memory",
+            FormatBytes(process.WorkingSet64),
+            $"Private: {FormatBytes(process.PrivateMemorySize64)}"
+        );
+
+        // GC metrics
+        _systemTable.AddRow(
+            "GC",
+            $"Gen0: {GC.CollectionCount(0)}",
+            $"Gen1: {GC.CollectionCount(1)}, Gen2: {GC.CollectionCount(2)}"
+        );
     }
 
     private void UpdateProcessTable(ProcessMetrics metrics)
@@ -142,186 +170,35 @@ public class MonitorCommand : AsyncCommand
 
         foreach (var (processId, lastMetrics) in _lastMetrics)
         {
-            var uptime = DateTime.UtcNow - lastMetrics.Timestamp;
-            var uptimeStr = FormatUptime(uptime);
-            var cpuStr = $"{lastMetrics.CpuPercentage:F1}%";
-            var memoryStr = FormatBytes(lastMetrics.MemoryBytes);
+            var age = DateTime.UtcNow - lastMetrics.Timestamp;
+            if (age > TimeSpan.FromMinutes(1)) continue; // Skip stale entries
 
-            // Special handling for GhostFather
-            string type = processId == "GhostFather" ? "[blue]Daemon[/]" : "App";
-
-            var row = new string[]
-            {
+            _processTable.AddRow(
                 processId,
                 GetStatusMarkup(lastMetrics),
-                uptimeStr,
-                cpuStr,
-                memoryStr,
-                type,
-                lastMetrics.Gen0Collections.ToString()
-            };
-
-            _processTable.AddRow(row);
+                $"{FormatUptime(age)}",
+                $"{lastMetrics.CpuPercentage:F1}%",
+                FormatBytes(lastMetrics.MemoryBytes),
+                processId == "ghost" ? "[blue]daemon[/]" : "app",
+                lastMetrics.ThreadCount.ToString()
+            );
         }
     }
 
     private static string GetStatusMarkup(ProcessMetrics metrics)
     {
-        if (metrics.CpuPercentage > 80)
-            return "[red]high load[/]";
-        if (metrics.CpuPercentage > 0)
-            return "[green]running[/]";
-        return "[yellow]idle[/]";
+        if (metrics.CpuPercentage > 80) return "[red]high load[/]";
+        if (metrics.CpuPercentage > 50) return "[yellow]busy[/]";
+        if (metrics.CpuPercentage > 0) return "[green]running[/]";
+        return "[grey]idle[/]";
     }
 
-    private static bool IsDaemonRunning()
+    private static string FormatUptime(TimeSpan ts)
     {
-        if (OperatingSystem.IsWindows())
-        {
-            // Check Windows service
-            using var process = new Process
-            {
-                StartInfo = new ProcessStartInfo
-                {
-                    FileName = "sc",
-                    Arguments = "query GhostFatherDaemon",
-                    UseShellExecute = false,
-                    RedirectStandardOutput = true,
-                    CreateNoWindow = true
-                }
-            };
-            process.Start();
-            var output = process.StandardOutput.ReadToEnd();
-            return output.Contains("RUNNING");
-        }
-        else
-        {
-            // Check systemd service
-            using var process = new Process
-            {
-                StartInfo = new ProcessStartInfo
-                {
-                    FileName = "systemctl",
-                    Arguments = "is-active ghost",
-                    UseShellExecute = false,
-                    RedirectStandardOutput = true,
-                    CreateNoWindow = true
-                }
-            };
-            process.Start();
-            var output = process.StandardOutput.ReadToEnd();
-            return output.Trim() == "active";
-        }
-    }
-
-    private static (bool isInstalled, string info) CheckInstallation()
-    {
-        var issues = new List<string>();
-        bool hasService = false;
-        bool hasExecutables = false;
-
-        if (OperatingSystem.IsWindows())
-        {
-            // Check service installation
-            using var sc = new Process
-            {
-                StartInfo = new ProcessStartInfo
-                {
-                    FileName = "sc",
-                    Arguments = "query GhostFatherDaemon",
-                    UseShellExecute = false,
-                    RedirectStandardOutput = true,
-                    CreateNoWindow = true
-                }
-            };
-            sc.Start();
-            hasService = sc.StandardOutput.ReadToEnd().Contains("GhostFatherDaemon");
-
-            // Check executable locations
-            var programFiles = Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles);
-            hasExecutables = File.Exists(Path.Combine(programFiles, "Ghost", "ghost.exe"));
-        }
-        else
-        {
-            // Check systemd service
-            using var systemctl = new Process
-            {
-                StartInfo = new ProcessStartInfo
-                {
-                    FileName = "systemctl",
-                    Arguments = "list-unit-files ghost.service",
-                    UseShellExecute = false,
-                    RedirectStandardOutput = true,
-                    CreateNoWindow = true
-                }
-            };
-            systemctl.Start();
-            hasService = systemctl.StandardOutput.ReadToEnd().Contains("ghost.service");
-
-            // Check executable locations
-            hasExecutables = File.Exists("/usr/local/bin/ghost");
-        }
-
-        if (!hasService) issues.Add("service missing");
-        if (!hasExecutables) issues.Add("executables missing");
-
-        return (hasService && hasExecutables,
-            issues.Count > 0 ? $"Issues: {string.Join(", ", issues)}" : "Fully installed");
-    }
-
-    private static bool IsCliAccessible()
-    {
-        var paths = Environment.GetEnvironmentVariable("PATH")?.Split(Path.PathSeparator);
-        if (paths == null) return false;
-
-        foreach (var path in paths)
-        {
-            var exePath = Path.Combine(path, OperatingSystem.IsWindows() ? "ghost.exe" : "ghost");
-            if (File.Exists(exePath))
-                return true;
-        }
-
-        return false;
-    }
-
-    private static string GetDaemonInfo()
-    {
-        if (OperatingSystem.IsWindows())
-        {
-            var programFiles = Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles);
-            var exePath = Path.Combine(programFiles, "Ghost", "GhostFatherDaemon.exe");
-            return File.Exists(exePath) ? exePath : "Not found";
-        }
-        else
-        {
-            return File.Exists("/usr/local/bin/ghostd") ? "/usr/local/bin/ghostd" : "Not found";
-        }
-    }
-
-    private static string GetCliInfo()
-    {
-        var paths = Environment.GetEnvironmentVariable("PATH")?.Split(Path.PathSeparator);
-        if (paths == null) return "PATH not set";
-
-        foreach (var path in paths)
-        {
-            var exePath = Path.Combine(path, OperatingSystem.IsWindows() ? "ghost.exe" : "ghost");
-            if (File.Exists(exePath))
-                return exePath;
-        }
-
-        return "Not in PATH";
-    }
-
-    private static string FormatUptime(TimeSpan uptime)
-    {
-        if (uptime.TotalDays >= 1)
-            return $"{uptime.Days}d {uptime.Hours}h";
-        if (uptime.TotalHours >= 1)
-            return $"{uptime.Hours}h {uptime.Minutes}m";
-        if (uptime.TotalMinutes >= 1)
-            return $"{uptime.Minutes}m {uptime.Seconds}s";
-        return $"{uptime.Seconds}s";
+        if (ts.TotalDays >= 1) return $"{ts.Days}d {ts.Hours}h";
+        if (ts.TotalHours >= 1) return $"{ts.Hours}h {ts.Minutes}m";
+        if (ts.TotalMinutes >= 1) return $"{ts.Minutes}m {ts.Seconds}s";
+        return $"{ts.Seconds}s";
     }
 
     private static string FormatBytes(long bytes)
@@ -333,7 +210,6 @@ public class MonitorCommand : AsyncCommand
         {
             dblBytes = bytes / 1024.0;
         }
-
         return $"{dblBytes:0.##}{suffix[i]}";
     }
 }

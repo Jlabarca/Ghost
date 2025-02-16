@@ -34,7 +34,7 @@ public abstract class GhostApp : GhostAppBase
     /// Main execution method. For one-off apps, this runs once.
     /// For services, this sets up any initial state before ticking begins.
     /// </summary>
-    public abstract Task RunAsync();
+    public abstract Task RunAsync(IEnumerable<string> args);
 
     /// <summary>
     /// Optional service tick method. Override this to implement service behavior.
@@ -105,7 +105,7 @@ public abstract class GhostApp : GhostAppBase
     /// <summary>
     /// Executes the app with lifecycle management
     /// </summary>
-    public async Task<bool> ExecuteAsync()
+    public async Task<bool> ExecuteAsync(IEnumerable<string> args)
     {
         await _runLock.WaitAsync();
         try
@@ -125,7 +125,7 @@ public abstract class GhostApp : GhostAppBase
             try
             {
                 await OnBeforeRunAsync();
-                await RunAsync();
+                await RunAsync(args);
 
                 if (IsService)
                 {
@@ -161,7 +161,7 @@ public abstract class GhostApp : GhostAppBase
     /// <summary>
     /// Stops a running service
     /// </summary>
-    public virtual async Task StopAsync()
+    public async virtual Task StopAsync()
     {
         if (!_isRunning || !IsService) return;
 
@@ -180,6 +180,7 @@ public abstract class GhostApp : GhostAppBase
             _runLock.Release();
         }
     }
+
     public override async ValueTask DisposeAsync()
     {
         await _runLock.WaitAsync();
@@ -199,30 +200,6 @@ public abstract class GhostApp : GhostAppBase
         {
             _runLock.Release();
             _runLock.Dispose();
-        }
-    }
-
-    // Static helper methods
-    public static async Task RunAsync<T>(GhostConfig config = null) where T : GhostApp
-    {
-        await using var app = (T)Activator.CreateInstance(typeof(T), config);
-        await app.ExecuteAsync();
-    }
-
-    public static async Task<bool> TryRunAsync<T>(
-        GhostConfig config = null,
-        Action<Exception> onError = null
-    ) where T : GhostApp
-    {
-        try
-        {
-            await using var app = (T)Activator.CreateInstance(typeof(T), config);
-            return await app.ExecuteAsync();
-        }
-        catch (Exception ex)
-        {
-            onError?.Invoke(ex);
-            return false;
         }
     }
 }

@@ -1,7 +1,7 @@
-using Ghost.Core.Config;
 using Microsoft.Extensions.DependencyInjection;
 using Spectre.Console;
 using Spectre.Console.Cli;
+using Ghost.Core.Config;
 using Ghost.SDK;
 
 namespace Ghost.Father.CLI;
@@ -35,7 +35,6 @@ public class GhostFatherCLI : GhostApp
         // Register all commands
         CommandRegistry.RegisterServices(services);
 
-        // Debug log registered services
         G.LogDebug("Registered services:");
         foreach (var service in services)
         {
@@ -55,42 +54,26 @@ public class GhostFatherCLI : GhostApp
 
             // Register all commands from registry
             CommandRegistry.ConfigureCommands(config);
+
+            config.PropagateExceptions();
         });
     }
 
-    public override async Task RunAsync()
+    public override async Task RunAsync(IEnumerable<string> args)
     {
-        try
+        //var args = GetCommandLineArgs(); // Helper method to get args
+        G.LogDebug("Running CLI with args: {0}", string.Join(" ", args));
+        await _app.RunAsync(args);
+    }
+
+    private string[] GetCommandLineArgs()
+    {
+        var args = Environment.GetCommandLineArgs();
+        if (args.Length > 0 && (args[0].EndsWith(".exe", StringComparison.OrdinalIgnoreCase) ||
+                                args[0].EndsWith(".dll", StringComparison.OrdinalIgnoreCase)))
         {
-            await _app.RunAsync(Environment.GetCommandLineArgs());
+            return args.Skip(1).ToArray();
         }
-        catch (Exception ex)
-        {
-            // Enhanced error logging
-            if (ex.Message.Contains("Could not resolve type"))
-            {
-                G.LogError("Dependency injection error:");
-                var resolver = new TypeResolver(_services.BuildServiceProvider());
-                try
-                {
-                    // Try to resolve to get detailed error
-                    var type = Type.GetType(ex.Message.Split('\'')[1]);
-                    if (type != null)
-                    {
-                        resolver.Resolve(type);
-                    }
-                }
-                catch (InvalidOperationException resolveEx)
-                {
-                    G.LogError(resolveEx.Message);
-                }
-            }
-            else
-            {
-                G.LogError(ex.Message);
-            }
-            AnsiConsole.MarkupLine($"[red]Error:[/] {ex.Message}");
-            throw;
-        }
+        return args;
     }
 }

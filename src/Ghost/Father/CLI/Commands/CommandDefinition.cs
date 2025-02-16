@@ -28,6 +28,47 @@ public class CommandDefinition
 /// </summary>
 public static class CommandRegistry
 {
+    static CommandRegistry()
+    {
+        // Validate command implementations at startup
+        foreach (var command in _commands)
+        {
+            ValidateCommandImplementation(command);
+        }
+    }
+
+    private static void ValidateCommandImplementation(CommandDefinition command)
+    {
+        G.LogDebug($"Validating command: {command.Name} ({command.CommandType.Name})");
+        G.LogDebug($"  Base type: {command.CommandType.BaseType?.Name ?? "none"}");
+        G.LogDebug($"  Implements ICommand: {typeof(ICommand).IsAssignableFrom(command.CommandType)}");
+
+        // Check inheritance
+        if (!typeof(ICommand).IsAssignableFrom(command.CommandType) &&
+            !typeof(AsyncCommand).IsAssignableFrom(command.CommandType))
+        {
+            throw new InvalidOperationException(
+                $"Command {command.Name} ({command.CommandType.Name}) must inherit from Command<T> or AsyncCommand<T>");
+        }
+
+        // Check for settings type
+        var settingsType = command.CommandType.BaseType?.GenericTypeArguments.FirstOrDefault();
+        if (settingsType == null || !typeof(CommandSettings).IsAssignableFrom(settingsType))
+        {
+            throw new InvalidOperationException(
+                $"Command {command.Name} ({command.CommandType.Name}) must have Settings that inherit from CommandSettings");
+        }
+
+        // Check for execute method
+        var executeMethod = command.CommandType.GetMethod("Execute") ??
+                          command.CommandType.GetMethod("ExecuteAsync");
+        if (executeMethod == null)
+        {
+            throw new InvalidOperationException(
+                $"Command {command.Name} ({command.CommandType.Name}) must implement Execute or ExecuteAsync");
+        }
+    }
+
     private static readonly List<CommandDefinition> _commands = new()
     {
         new(typeof(CreateCommand), "create", "Create a new Ghost app project",
@@ -50,7 +91,7 @@ public static class CommandRegistry
 
         new(typeof(RemoveCommand), "remove", "Remove a Ghost app",
             "remove myapp"),
-            
+
         new(typeof(ValidateCommand), "validate", "Validate Ghost installation and configuration",
             "validate", "validate --verbose", "validate --fix")
     };
@@ -73,11 +114,29 @@ public static class CommandRegistry
     {
         foreach (var command in _commands)
         {
-            var method = typeof(IConfigurator)
-                .GetMethod("AddCommand")?
-                .MakeGenericMethod(command.CommandType);
+            // Get base command type (either Command<T> or AsyncCommand<T>)
+            Type baseCommandType = command.CommandType.BaseType;
+            if (baseCommandType == null || !baseCommandType.IsGenericType)
+            {
+                throw new InvalidOperationException(
+                    $"Command {command.Name} must inherit from Command<T> or AsyncCommand<T>");
+            }
 
-            var commandConfig = method?.Invoke(config, new object[] { command.Name }) as ICommandConfigurator;
+            // Get the settings type from the generic argument
+            Type settingsType = baseCommandType.GetGenericArguments()[0];
+
+            // Use GetGenericMethod helper to ensure constraint satisfaction
+            var addCommandMethod = typeof(IConfigurator).GetMethod("AddCommand")
+                ?.MakeGenericMethod(command.CommandType);
+
+            if (addCommandMethod == null)
+            {
+                throw new InvalidOperationException(
+                    $"Could not create AddCommand method for {command.Name}. " +
+                    $"Ensure it implements ICommand and has proper CommandSettings.");
+            }
+
+            var commandConfig = addCommandMethod.Invoke(config, new object[] { command.Name }) as ICommandConfigurator;
             
             if (commandConfig != null)
             {

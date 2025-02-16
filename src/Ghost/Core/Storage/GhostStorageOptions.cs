@@ -1,4 +1,5 @@
 using Ghost.Core.Data;
+using Ghost.Core.Monitoring;
 using Ghost.Core.PM;
 using Ghost.Father;
 using Ghost.Father.Models;

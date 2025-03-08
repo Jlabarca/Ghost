@@ -61,34 +61,26 @@ public static partial class G
 
     private static async Task RunCli(string[] args)
     {
-        try
+        // Create CLI config
+        var config = new GhostConfig
         {
-            // Create CLI config
-            var config = new GhostConfig
+            App = new AppInfo
             {
-                App = new AppInfo
-                {
-                    Id = "ghost-cli",
-                    Name = "Ghost CLI",
-                    Description = "Ghost Command Line Interface",
-                    Version = "1.0.0"
-                },
-                Core = new CoreConfig
-                {
-                    HealthCheckInterval = TimeSpan.FromSeconds(30),
-                    MetricsInterval = TimeSpan.FromSeconds(5)
-                }
-            };
+                Id = "ghost-cli",
+                Name = "Ghost CLI",
+                Description = "Ghost Command Line Interface",
+                Version = "1.0.0"
+            },
+            Core = new CoreConfig
+            {
+                HealthCheckInterval = TimeSpan.FromSeconds(30),
+                MetricsInterval = TimeSpan.FromSeconds(5)
+            }
+        };
 
-            // Create and run CLI
-            var cli = new GhostFatherCLI(config);
-            await cli.RunAsync(args); //TODO: pass args and config
-        }
-        catch (Exception ex)
-        {
-            G.LogCritical("Fatal error in GhostFatherCLI", ex);
-            Environment.Exit(1);
-        }
+        // Create and run CLI
+        var cli = new GhostFatherCLI(config);
+        await cli.RunAsync(args); //TODO: pass args and config
     }
 
     private static GhostConfig CreateConfigFromArgs(string[] args)

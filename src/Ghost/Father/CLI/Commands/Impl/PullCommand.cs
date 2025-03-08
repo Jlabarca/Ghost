@@ -9,6 +9,7 @@ namespace Ghost.Father.CLI.Commands;
 public class PullCommand : AsyncCommand<PullCommand.Settings>
 {
     private readonly IGhostBus _bus;
+    private const string GHOSTS_FOLDER = "ghosts";
 
     public PullCommand(IGhostBus bus)
     {
@@ -39,12 +40,11 @@ public class PullCommand : AsyncCommand<PullCommand.Settings>
                 AnsiConsole.MarkupLine("[red]Error:[/] Not a git repository");
                 return 1;
             }
-
             // Pull in current directory
             return await PullCurrentRepository(settings);
         }
-        
-        // Clone new repository
+
+        // Clone new repository into the ghosts folder
         return await CloneRepository(settings);
     }
 
@@ -84,6 +84,7 @@ public class PullCommand : AsyncCommand<PullCommand.Settings>
                     {
                         pullCommand += " --force";
                     }
+
                     await RunGitCommand(pullCommand);
                 });
 
@@ -113,26 +114,39 @@ public class PullCommand : AsyncCommand<PullCommand.Settings>
             var appName = Path.GetFileNameWithoutExtension(settings.Repository)
                 .Replace(".git", "", StringComparison.OrdinalIgnoreCase);
 
+            // Create the ghosts directory
+            var ghostsPath = Path.Combine(AppContext.BaseDirectory, GHOSTS_FOLDER);
+            Directory.CreateDirectory(ghostsPath);
+
+            var targetDir = Path.Combine(ghostsPath, appName);
+
             // Check if directory already exists
-            if (Directory.Exists(appName) && !settings.Force)
+            if (Directory.Exists(targetDir) && !settings.Force)
             {
-                AnsiConsole.MarkupLine($"[red]Error:[/] Directory {appName} already exists. Use --force to override.");
+                AnsiConsole.MarkupLine($"[red]Error:[/] Directory {targetDir} already exists. Use --force to override.");
                 return 1;
+            }
+
+            // Delete the directory if force is specified
+            if (Directory.Exists(targetDir) && settings.Force)
+            {
+                Directory.Delete(targetDir, true);
             }
 
             // Clone repository
             await AnsiConsole.Status()
                 .StartAsync($"Cloning {appName}...", async ctx =>
                 {
-                    var cloneCommand = $"clone {settings.Repository} {appName}";
+                    var cloneCommand = $"clone {settings.Repository} {targetDir}";
                     if (settings.Branch != "main")
                     {
                         cloneCommand += $" -b {settings.Branch}";
                     }
+
                     await RunGitCommand(cloneCommand);
                 });
 
-            AnsiConsole.MarkupLine($"[green]Successfully cloned {appName}[/]");
+            AnsiConsole.MarkupLine($"[green]Successfully cloned {appName} to {targetDir}[/]");
 
             // Run app if requested
             if (settings.RunAfterPull)

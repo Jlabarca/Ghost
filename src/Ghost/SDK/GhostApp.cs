@@ -1,5 +1,6 @@
 using Ghost.Core;
 using Ghost.Core.Config;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace Ghost.SDK;
 
@@ -24,6 +25,7 @@ public abstract class GhostApp : GhostAppBase
     protected GhostApp(GhostConfig config = null) : base(config)
     {
         G.SetCurrent(this);
+        Services.BuildServiceProvider();
         if (IsService)
         {
             _tickTimer = new Timer(OnTickCallback, null, Timeout.InfiniteTimeSpan, Timeout.InfiniteTimeSpan);

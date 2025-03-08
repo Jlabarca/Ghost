@@ -10,14 +10,14 @@ public abstract class GhostAppBase : IAsyncDisposable
     internal protected readonly IGhostBus Bus;
     internal protected readonly IGhostData Data;
     internal protected readonly IAutoMonitor Metrics;
-    internal protected readonly IServiceProvider Services;
+    internal protected readonly ServiceCollection Services;
     internal protected readonly GhostConfig Config;
     protected readonly CancellationTokenSource _cts;
     private readonly SemaphoreSlim _lock = new(1, 1);
     private bool _isInitialized;
     private bool _disposed;
 
-    protected GhostAppBase(GhostConfig config = null)
+    protected GhostAppBase(GhostConfig? config = null)
     {
         _cts = new CancellationTokenSource();
         _isInitialized = false;
@@ -42,18 +42,28 @@ public abstract class GhostAppBase : IAsyncDisposable
         };
 
         // Create service collection
-        var services = new ServiceCollection();
+        // GhostApp core services TODO: arrange core
+        // Build service provider
+
+
+        Services = new ServiceCollection();
 
         // Configure services
-        ConfigureServices(services);
+        ConfigureServices(Services);
 
-        // Build service provider
-        Services = services.BuildServiceProvider();
+        var provider = Services.BuildServiceProvider();
 
         // Resolve dependencies
-        Bus = Services.GetRequiredService<IGhostBus>();
-        Data = Services.GetRequiredService<IGhostData>();
-        Metrics = Services.GetRequiredService<IAutoMonitor>();
+        Bus = provider.GetRequiredService<IGhostBus>();
+        Data = provider.GetRequiredService<IGhostData>();
+        Metrics = provider.GetRequiredService<IAutoMonitor>();
+
+        Services.AddSingleton(Config);
+        Services.AddSingleton(Bus);
+        Services.AddSingleton(Data);
+        Services.AddSingleton(Metrics);
+
+
 
         G.LogInfo("GhostAppBase constructed with config: {0}", Config.App.Id);
     }
@@ -190,7 +200,7 @@ public abstract class GhostAppBase : IAsyncDisposable
 
     protected virtual void ConfigureAppServices(IServiceCollection services)
     {
-        // Override in derived classes
+
     }
 
     public async virtual ValueTask DisposeAsync()

@@ -1,42 +1,34 @@
 using Microsoft.Extensions.DependencyInjection;
-using Spectre.Console;
 using Spectre.Console.Cli;
 using Ghost.Core.Config;
 using Ghost.SDK;
+using Ghost.Templates;
 
 namespace Ghost.Father.CLI;
 
 public class GhostFatherCLI : GhostApp
 {
     private readonly CommandApp _app;
-    private readonly IServiceCollection _services;
     private readonly TypeRegistrar _registrar;
 
     public GhostFatherCLI(GhostConfig config = null) : base(config)
     {
-        _services = new ServiceCollection();
-        ConfigureServices(_services);
-        _registrar = new TypeRegistrar(_services);
+        ConfigureServices();
+        _registrar = new TypeRegistrar(Services);
         _app = new CommandApp(_registrar);
         ConfigureCommands(_app);
     }
 
-    private void ConfigureServices(IServiceCollection services)
+    private void ConfigureServices()
     {
-        // Register core services
-        services.AddSingleton(Bus);
-        services.AddSingleton(Data);
-        services.AddSingleton(Config);
-        services.AddSingleton(Metrics);
-
-        // Register self for command access
-        services.AddSingleton<IServiceCollection>(services);
+        Services.AddSingleton(_ => new TemplateManager(Path.Combine(AppContext.BaseDirectory, "templates")));
+        Services.AddSingleton(Services);
 
         // Register all commands
-        CommandRegistry.RegisterServices(services);
+        CommandRegistry.RegisterServices(Services);
 
         G.LogDebug("Registered services:");
-        foreach (var service in services)
+        foreach (var service in Services)
         {
             G.LogDebug("  {0} -> {1}",
                 service.ServiceType.Name,

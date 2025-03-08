@@ -1,0 +1,17 @@
+{
+  "name": "full",
+  "description": "Complete Ghost application with all features enabled",
+  "author": "Ghost",
+  "version": "1.0.0",
+  "variables": {
+    "defaultNamespace": "{{ safe_name }}",
+    "defaultDescription": "A full-featured Ghost application"
+  },
+  "requiredPackages": {
+    "Ghost.SDK": "1.0.0",
+    "Ghost.Core": "1.0.0",
+    "Microsoft.Extensions.Configuration.Json": "9.0.0",
+    "Microsoft.Extensions.DependencyInjection": "9.0.0"
+  },
+  "tags": ["complete", "full", "production"]
+}

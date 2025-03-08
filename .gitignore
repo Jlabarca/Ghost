@@ -12,3 +12,6 @@ obj/
 .DS_Store
 
 .ghost
+src/Ghost/cache
+cache
+outputs

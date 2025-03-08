@@ -71,29 +71,24 @@ public static class CommandRegistry
 
     private static readonly List<CommandDefinition> _commands = new()
     {
-        new(typeof(CreateCommand), "create", "Create a new Ghost app project",
-            "create myapp", "create myapp --template service"),
-
-        new(typeof(RunCommand), "run", "Run a Ghost app",
-            "run myapp", "run myapp --watch"),
-
-        new(typeof(InstallCommand), "install", "Install GhostFatherDaemon as a system service",
-            "install", "install --user"),
-
-        new(typeof(PushCommand), "push", "Create git repo and push current Ghost app",
-            "push", "push --remote origin"),
-
-        new(typeof(PullCommand), "pull", "Pull Ghost app from repo and optionally run it",
-            "pull https://github.com/user/repo.git"),
-
-        new(typeof(MonitorCommand), "monitor", "Monitor running Ghost apps",
-            "monitor", "monitor --watch"),
-
-        new(typeof(RemoveCommand), "remove", "Remove a Ghost app",
-            "remove myapp"),
-
-        new(typeof(ValidateCommand), "validate", "Validate Ghost installation and configuration",
-            "validate", "validate --verbose", "validate --fix")
+            new(typeof(CreateCommand), "create", "Create a new Ghost app project",
+                    "create myapp", "create myapp --template service"),
+            new(typeof(RunCommand), "run", "Run a Ghost app",
+                    "run myapp", "run myapp --watch"),
+            new(typeof(InstallCommand), "install", "Install GhostFatherDaemon as a system service",
+                    "install", "install --user"),
+            new(typeof(PushCommand), "push", "Create git repo and push current Ghost app",
+                    "push", "push --remote origin"),
+            new(typeof(PullCommand), "pull", "Pull Ghost app from repo and optionally run it",
+                    "pull https://github.com/user/repo.git"),
+            new(typeof(MonitorCommand), "monitor", "Monitor running Ghost apps",
+                    "monitor", "monitor --watch"),
+            new(typeof(RemoveCommand), "remove", "Remove a Ghost app",
+                    "remove myapp"),
+            new(typeof(ValidateCommand), "validate", "Validate Ghost installation and configuration",
+                    "validate", "validate --verbose", "validate --fix"),
+            new(typeof(UpdateSdkCommand), "updatesdk", "Build and deploy the Ghost SDK as NuGet packages",
+                    "updatesdk", "updatesdk --version 1.1.0", "updatesdk --local-feed ./packages")
     };
 
     /// <summary>

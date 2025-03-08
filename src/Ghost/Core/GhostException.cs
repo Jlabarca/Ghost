@@ -27,7 +27,9 @@ public enum ErrorCode
     TemplateError,
     GitError,
     TemplateNotFound,
-    StorageConfigurationFailed
+    StorageConfigurationFailed,
+    TemplateCorrupted,
+    InstallationError
 }
 
 public class GhostException : Exception

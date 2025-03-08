@@ -1,11 +1,9 @@
-using Ghost.Core;
 using Ghost.Core.Storage;
 using Microsoft.Extensions.DependencyInjection;
 using Spectre.Console;
 using Spectre.Console.Cli;
 using System.ComponentModel;
 using System.Diagnostics;
-using System.Runtime.InteropServices;
 
 namespace Ghost.Father.CLI.Commands;
 
@@ -145,7 +143,6 @@ public class ValidateCommand : AsyncCommand<ValidateCommand.Settings>
 
     return hasErrors ? 1 : 0;
   }
-
 
   private void ValidateCommandRegistry(ValidationResult result)
   {

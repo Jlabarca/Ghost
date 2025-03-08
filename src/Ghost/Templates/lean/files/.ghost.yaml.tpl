@@ -7,6 +7,7 @@ app:
 core:
   healthCheckInterval: "00:00:30"
   metricsInterval: "00:00:05"
+  mode: "development"
   dataDirectory: "data"
 
 modules:
@@ -16,3 +17,9 @@ modules:
     options:
       path: "logs"
       level: "Information"
+
+  cache:
+    enabled: true
+    provider: "memory"
+    options:
+      maxSize: "100MB"

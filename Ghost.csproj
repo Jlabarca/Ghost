@@ -1,7 +1,7 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
     <OutputType>Exe</OutputType>
-    <TargetFramework>net8.0</TargetFramework>
+    <TargetFramework>net9.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
 
@@ -20,22 +20,40 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="Dapper" Version="2.1.35" />
-    <PackageReference Include="LibGit2Sharp" Version="0.31.0" />
-    <PackageReference Include="Microsoft.Data.Sqlite" Version="9.0.1" />
+    <None Include="README.md" Pack="true" PackagePath="\"/>
+
+    Ghost.Logger
+    
+    //Core Dependencies: Ghost.Core
+    <PackageReference Include="YamlDotNet" Version="16.3.0" /> //config
+    <PackageReference Include="Dapper" Version="2.1.35" />  //db
     <PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="9.0.1" />
-    <PackageReference Include="Microsoft.Extensions.Options" Version="9.0.1" />
-    <PackageReference Include="Microsoft.Extensions.Options.ConfigurationExtensions" Version="9.0.1" />    <PackageReference Include="NLua" Version="1.7.4" />
+    <PackageReference Include="Newtonsoft.Json" Version="13.0.3" />
+    <PackageReference Include="Microsoft.Data.Sqlite" Version="9.0.1" />
+
+    //Advanced Persistence: Ghost.Plugin.Persistence: extra stuff for advanced persistence - plugin for Core
     <PackageReference Include="Npgsql" Version="9.0.2" />
+    <PackageReference Include="StackExchange.Redis" Version="2.8.24" />
+    
+    //Advanced Templating: Ghost.Father uses both but at the same time implements a persistent ghost app that can manage other apps and a CLI tooling that allows to create ghost apps from templates.
     <PackageReference Include="Scriban" Version="5.12.1" />
     <PackageReference Include="Spectre.Console" Version="0.49.1" />
     <PackageReference Include="Spectre.Console.Cli" Version="0.49.1" />
-    <None Include="README.md" Pack="true" PackagePath="\"/>
-    <PackageReference Include="StackExchange.Redis" Version="2.8.24" />
-    <PackageReference Include="YamlDotNet" Version="16.3.0" />
+    <PackageReference Include="LibGit2Sharp" Version="0.31.0" />
+
+    //SDK Dependencies: Ghost.SDK: stuff needed to communicate with the Ghost environment -
+    //lean template is for an app that does not need ghost tooling ()- just reporting to the ghost environment
+    <PackageReference Include="Dapper" Version="2.1.35" />
+    <PackageReference Include="Newtonsoft.Json" Version="13.0.3" />
+    <PackageReference Include="Microsoft.Data.Sqlite" Version="9.0.1" />
+
   </ItemGroup>
 
   <ItemGroup>
     <Folder Include="src\Ghost\Core\Commands\Utils\" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Content Include="src\Ghost\SDK\Ghost.SDK.csproj" />
   </ItemGroup>
 </Project>

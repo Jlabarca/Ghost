@@ -3,7 +3,7 @@ using Ghost.Core.Data;
 using Ghost.Core.Monitoring;
 using Ghost.Core.Storage;
 using Ghost.SDK;
-
+using System.Diagnostics;
 namespace Ghost;
 
 public static partial class GhostFather
@@ -14,7 +14,7 @@ public static partial class GhostFather
     public static IGhostBus Bus => GetCurrent().Bus;
     public static IGhostData Data => GetCurrent().Data;
     public static GhostConfig Config => GetCurrent().Config;
-    public static IAutoMonitor Metrics => GetCurrent().Metrics;
+    public static IAutoMonitor Monitor => GetCurrent().Metrics;
 
     private static GhostAppBase GetCurrent()
     {

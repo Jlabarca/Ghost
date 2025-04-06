@@ -10,9 +10,10 @@ namespace Ghost.Father.CLI.Commands;
 public class MonitorCommand : AsyncCommand<MonitorCommand.Settings>
 {
     private readonly IGhostBus _bus;
-    private readonly Table _processTable;
     private readonly Table _systemTable;
-    private readonly Dictionary<string, ProcessMetrics> _lastMetrics = new();
+    private readonly Table _servicesTable;
+    private readonly Table _oneShortAppsTable;
+    private readonly Dictionary<string, ProcessState> _processes = new();
     private bool _watching;
 
     public class Settings : CommandSettings
@@ -31,21 +32,22 @@ public class MonitorCommand : AsyncCommand<MonitorCommand.Settings>
         public string? ProcessId { get; set; }
     }
 
+    // Process tracking class
+    private class ProcessState
+    {
+        public string Id { get; set; } = string.Empty;
+        public string Name { get; set; } = string.Empty;
+        public bool IsRunning { get; set; } = true;
+        public bool IsService { get; set; }
+        public DateTime StartTime { get; set; } = DateTime.UtcNow;
+        public DateTime? EndTime { get; set; }
+        public ProcessMetrics? LastMetrics { get; set; }
+        public DateTime LastSeen { get; set; } = DateTime.UtcNow;
+    }
+
     public MonitorCommand(IGhostBus bus)
     {
         _bus = bus;
-
-        // Process table
-        _processTable = new Table()
-            .Border(TableBorder.Rounded)
-            .Title("[blue]Processes[/]")
-            .AddColumn("[grey]App[/]")
-            .AddColumn("[grey]Status[/]")
-            .AddColumn("[grey]Uptime[/]")
-            .AddColumn("[grey]CPU[/]")
-            .AddColumn("[grey]Memory[/]")
-            .AddColumn("[grey]Type[/]")
-            .AddColumn("[grey]Restarts[/]");
 
         // System status table
         _systemTable = new Table()
@@ -54,6 +56,27 @@ public class MonitorCommand : AsyncCommand<MonitorCommand.Settings>
             .AddColumn("[grey]Component[/]")
             .AddColumn("[grey]Status[/]")
             .AddColumn("[grey]Info[/]");
+
+        // Services table
+        _servicesTable = new Table()
+            .Border(TableBorder.Rounded)
+            .Title("[blue]Services[/]")
+            .AddColumn("[grey]Service[/]")
+            .AddColumn("[grey]Status[/]")
+            .AddColumn("[grey]Started[/]")
+            .AddColumn("[grey]Stopped[/]")
+            .AddColumn("[grey]Resource Usage[/]")
+            .AddColumn("[grey]Actions[/]");
+
+        // One-shot apps table
+        _oneShortAppsTable = new Table()
+            .Border(TableBorder.Rounded)
+            .Title("[blue]One-Shot Applications[/]")
+            .AddColumn("[grey]App[/]")
+            .AddColumn("[grey]Status[/]")
+            .AddColumn("[grey]Started[/]")
+            .AddColumn("[grey]Completed[/]")
+            .AddColumn("[grey]Resource Usage[/]");
     }
 
     public override async Task<int> ExecuteAsync(CommandContext context, Settings settings)
@@ -67,19 +90,26 @@ public class MonitorCommand : AsyncCommand<MonitorCommand.Settings>
             var layout = new Layout("Root")
                 .SplitRows(
                     new Layout("System", _systemTable),
-                    new Layout("Processes", _processTable).Size(20)
-                );
+                    new Layout("Services", _servicesTable).Size(10),
+                    new Layout("OneShot", _oneShortAppsTable).Size(10));
 
             // Start live display
             await AnsiConsole.Live(layout)
                 .AutoClear(false)
                 .Overflow(VerticalOverflow.Ellipsis)
                 .Cropping(VerticalOverflowCropping.Bottom)
-                .StartAsync(async ctx =>
-                {
+                .StartAsync(async ctx => {
+                    // Start system status update task
                     Task systemTask = MonitorSystemStatusAsync(ctx, settings);
-                    Task processTask = MonitorProcessesAsync(ctx, settings);
-                    await Task.WhenAll(systemTask, processTask);
+
+                    // Start process metrics monitoring task
+                    Task metricsTask = MonitorProcessMetricsAsync(ctx, settings);
+
+                    // Start task to check for processes that haven't sent metrics recently
+                    Task stalledTask = MonitorStalledProcessesAsync(ctx, settings);
+
+                    // Wait for all tasks
+                    await Task.WhenAll(systemTask, metricsTask, stalledTask);
                 });
 
             return 0;
@@ -115,17 +145,20 @@ public class MonitorCommand : AsyncCommand<MonitorCommand.Settings>
         }
     }
 
-    private async Task MonitorProcessesAsync(LiveDisplayContext ctx, Settings settings)
+    private async Task MonitorProcessMetricsAsync(LiveDisplayContext ctx, Settings settings)
     {
         try
         {
             var filter = settings.ProcessId != null ? $"ghost:metrics:{settings.ProcessId}" : "ghost:metrics:#";
-
             await foreach (var metrics in _bus.SubscribeAsync<ProcessMetrics>(filter))
             {
                 if (!_watching) break;
 
-                UpdateProcessTable(metrics);
+                // Update process state
+                UpdateProcessState(metrics);
+
+                // Update tables
+                UpdateProcessTables();
                 ctx.Refresh();
             }
         }
@@ -134,6 +167,44 @@ public class MonitorCommand : AsyncCommand<MonitorCommand.Settings>
             G.LogError("Error monitoring processes", ex);
             if (!settings.NoClear) AnsiConsole.Clear();
             AnsiConsole.MarkupLine($"[red]Error monitoring processes:[/] {ex.Message}");
+        }
+    }
+
+    private async Task MonitorStalledProcessesAsync(LiveDisplayContext ctx, Settings settings)
+    {
+        while (_watching)
+        {
+            try
+            {
+                // Check for stalled processes (no metrics for more than 10 seconds)
+                var now = DateTime.UtcNow;
+                var stalledThreshold = TimeSpan.FromSeconds(10);
+
+                bool updated = false;
+
+                foreach (var process in _processes.Values)
+                {
+                    if (process.IsRunning && now - process.LastSeen > stalledThreshold)
+                    {
+                        process.IsRunning = false;
+                        process.EndTime = process.LastSeen;
+                        updated = true;
+                    }
+                }
+
+                if (updated)
+                {
+                    UpdateProcessTables();
+                    ctx.Refresh();
+                }
+
+                await Task.Delay(settings.RefreshInterval * 1000);
+            }
+            catch (Exception ex)
+            {
+                G.LogError("Error checking stalled processes", ex);
+                await Task.Delay(5000); // Wait before retrying
+            }
         }
     }
 
@@ -161,44 +232,149 @@ public class MonitorCommand : AsyncCommand<MonitorCommand.Settings>
             $"Gen0: {GC.CollectionCount(0)}",
             $"Gen1: {GC.CollectionCount(1)}, Gen2: {GC.CollectionCount(2)}"
         );
+
+        // Monitored processes count
+        _systemTable.AddRow(
+            "Monitoring",
+            $"{_processes.Count} processes",
+            $"Services: {_processes.Values.Count(p => p.IsService)}, One-shot: {_processes.Values.Count(p => !p.IsService)}"
+        );
     }
 
-    private void UpdateProcessTable(ProcessMetrics metrics)
+    private void UpdateProcessState(ProcessMetrics metrics)
     {
-        _lastMetrics[metrics.ProcessId] = metrics;
-        _processTable.Rows.Clear();
+        // Determine if this is a service based on process characteristics
+        // In a real implementation, this would come from actual process metadata
+        bool isService = DetermineIfService(metrics);
 
-        foreach (var (processId, lastMetrics) in _lastMetrics)
+        if (!_processes.TryGetValue(metrics.ProcessId, out var process))
         {
-            var age = DateTime.UtcNow - lastMetrics.Timestamp;
-            if (age > TimeSpan.FromMinutes(1)) continue; // Skip stale entries
+            // New process
+            process = new ProcessState
+            {
+                Id = metrics.ProcessId,
+                Name = GetDisplayName(metrics.ProcessId),
+                IsService = isService,
+                StartTime = DateTime.UtcNow,
+                LastMetrics = metrics,
+                LastSeen = DateTime.UtcNow
+            };
+            _processes[metrics.ProcessId] = process;
+        }
+        else
+        {
+            // Update existing process
+            process.LastMetrics = metrics;
+            process.LastSeen = DateTime.UtcNow;
 
-            _processTable.AddRow(
-                processId,
-                GetStatusMarkup(lastMetrics),
-                $"{FormatUptime(age)}",
-                $"{lastMetrics.CpuPercentage:F1}%",
-                FormatBytes(lastMetrics.MemoryBytes),
-                processId == "ghost" ? "[blue]daemon[/]" : "app",
-                lastMetrics.ThreadCount.ToString()
+            // If previously marked as not running, update it
+            if (!process.IsRunning)
+            {
+                process.IsRunning = true;
+                process.EndTime = null;
+
+                // If it previously completed, reset it with a new start time
+                if (process.EndTime.HasValue)
+                {
+                    process.StartTime = DateTime.UtcNow;
+                }
+            }
+        }
+    }
+
+    private bool DetermineIfService(ProcessMetrics metrics)
+    {
+        // In a real implementation, this would use metadata from the process itself
+        // Here we use some heuristics to guess
+        return metrics.ProcessId.Contains("service", StringComparison.OrdinalIgnoreCase) ||
+               metrics.ProcessId.Contains("daemon", StringComparison.OrdinalIgnoreCase) ||
+               metrics.ProcessId == "ghost" || // Assume ghost itself is a service
+               metrics.ProcessId.EndsWith("d", StringComparison.OrdinalIgnoreCase); // Common daemon suffix
+    }
+
+    private void UpdateProcessTables()
+    {
+        _servicesTable.Rows.Clear();
+        _oneShortAppsTable.Rows.Clear();
+
+        // Split processes into services and one-shot apps and sort them
+        var services = _processes.Values
+            .Where(p => p.IsService)
+            .OrderByDescending(p => p.IsRunning)
+            .ThenBy(p => p.Name);
+
+        var oneShots = _processes.Values
+            .Where(p => !p.IsService)
+            .OrderByDescending(p => p.IsRunning)
+            .ThenByDescending(p => p.StartTime);
+
+        // Add services to the services table
+        foreach (var service in services)
+        {
+            string statusColor = service.IsRunning ? "green" : "grey";
+            string statusText = service.IsRunning ? "Running" : "Stopped";
+
+            _servicesTable.AddRow(
+                service.Name,
+                $"[{statusColor}]{statusText}[/]",
+                FormatDateTime(service.StartTime),
+                service.EndTime.HasValue ? FormatDateTime(service.EndTime.Value) : "",
+                service.IsRunning && service.LastMetrics != null ?
+                    $"CPU: {service.LastMetrics.CpuPercentage:F1}%, Mem: {FormatBytes(service.LastMetrics.MemoryBytes)}" : "",
+                service.IsRunning ?
+                    $"[blue][[Stop {service.Id}]][/]" :
+                    $"[green][[Start {service.Id}]][/]"
+            );
+        }
+
+        // Add one-shot apps to the one-shot table
+        foreach (var app in oneShots)
+        {
+            string statusColor = app.IsRunning ? "green" : "grey";
+            string statusText = app.IsRunning ? "Running" : "Completed";
+
+            _oneShortAppsTable.AddRow(
+                app.IsRunning ? $"[bold]{app.Name}[/]" : app.Name,
+                $"[{statusColor}]{statusText}[/]",
+                FormatDateTime(app.StartTime),
+                app.EndTime.HasValue ? FormatDateTime(app.EndTime.Value) : "",
+                app.IsRunning && app.LastMetrics != null ?
+                    $"CPU: {app.LastMetrics.CpuPercentage:F1}%, Mem: {FormatBytes(app.LastMetrics.MemoryBytes)}" : ""
             );
         }
     }
 
-    private static string GetStatusMarkup(ProcessMetrics metrics)
+    private string GetDisplayName(string processId)
     {
-        if (metrics.CpuPercentage > 80) return "[red]high load[/]";
-        if (metrics.CpuPercentage > 50) return "[yellow]busy[/]";
-        if (metrics.CpuPercentage > 0) return "[green]running[/]";
-        return "[grey]idle[/]";
+        // Try to extract a friendly name from the process ID
+        // This is a simplified version and would be more robust in a real implementation
+
+        // If it starts with "ghost:", extract the name after the colon
+        if (processId.StartsWith("ghost:"))
+        {
+            return processId.Substring(6);
+        }
+
+        // Remove any GUID-like suffixes
+        if (processId.Length > 36 && processId[^36] == '-' &&
+            Guid.TryParse(processId.Substring(processId.Length - 36), out _))
+        {
+            return processId.Substring(0, processId.Length - 37);
+        }
+
+        return processId;
     }
 
-    private static string FormatUptime(TimeSpan ts)
+    private string FormatDateTime(DateTime dt)
     {
-        if (ts.TotalDays >= 1) return $"{ts.Days}d {ts.Hours}h";
-        if (ts.TotalHours >= 1) return $"{ts.Hours}h {ts.Minutes}m";
-        if (ts.TotalMinutes >= 1) return $"{ts.Minutes}m {ts.Seconds}s";
-        return $"{ts.Seconds}s";
+        // If it's today, just show the time
+        if (dt.Date == DateTime.Today)
+        {
+            return dt.ToString("HH:mm:ss");
+        }
+
+        // Otherwise show date and time
+        return dt.ToString("yyyy-MM-dd HH:mm:ss");
     }
 
     private static string FormatBytes(long bytes)
@@ -211,5 +387,32 @@ public class MonitorCommand : AsyncCommand<MonitorCommand.Settings>
             dblBytes = bytes / 1024.0;
         }
         return $"{dblBytes:0.##}{suffix[i]}";
+    }
+
+    private async Task SendControlCommandAsync(string processId, string command)
+    {
+        try
+        {
+            // Create a system command to control the process
+            var systemCommand = new SystemCommand
+            {
+                CommandId = Guid.NewGuid().ToString(),
+                CommandType = command,
+                Parameters = new Dictionary<string, string>
+                {
+                    ["responseChannel"] = "ghost:monitor:response"
+                }
+            };
+
+            // Send the command
+            await _bus.PublishAsync("ghost:commands", systemCommand);
+
+            // Log the action
+            G.LogInfo($"Sent {command} command to process {processId}");
+        }
+        catch (Exception ex)
+        {
+            G.LogError(ex, $"Failed to send {command} command to process {processId}");
+        }
     }
 }

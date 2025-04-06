@@ -18,7 +18,6 @@ public class GhostFatherDaemon : GhostApp
     {
         // Configure as a service
         _config = config;
-        IsService = true;
         TickInterval = TimeSpan.FromSeconds(5);
         AutoRestart = true;
         MaxRestartAttempts = 3;

@@ -64,9 +64,7 @@ public abstract class GhostAppBase : IAsyncDisposable
         Services.AddSingleton(Data);
         Services.AddSingleton(Metrics);
 
-
-
-        G.LogInfo("GhostAppBase constructed with config: {0}", Config.App.Id);
+        G.LogDebug("GhostAppBase constructed with config: {0}", Config.App.Id);
     }
 
     protected async Task InitializeAsync()

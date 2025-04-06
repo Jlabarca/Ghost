@@ -2,7 +2,7 @@ using Ghost.Core;
 using Ghost.Core.Config;
 using Ghost.Core.Exceptions;
 using Microsoft.Extensions.DependencyInjection;
-
+using System.Diagnostics;
 namespace Ghost.SDK;
 
 /// <summary>
@@ -18,7 +18,6 @@ public abstract class GhostApp : GhostAppBase
 
     // Service configuration
     protected TimeSpan TickInterval { get; set; } = TimeSpan.FromSeconds(1);
-    protected bool IsService { get; set; }
     protected bool AutoRestart { get; set; }
     protected int MaxRestartAttempts { get; set; } = 3;
     protected TimeSpan RestartDelay { get; set; } = TimeSpan.FromSeconds(5);
@@ -27,10 +26,8 @@ public abstract class GhostApp : GhostAppBase
     {
         GhostFather.SetCurrent(this);
         Services.BuildServiceProvider();
-        if (IsService)
-        {
-            _tickTimer = new Timer(OnTickCallback, null, Timeout.InfiniteTimeSpan, Timeout.InfiniteTimeSpan);
-        }
+
+        _tickTimer = new Timer(OnTickCallback, null, Timeout.InfiniteTimeSpan, Timeout.InfiniteTimeSpan);
     }
 
     /// <summary>
@@ -77,6 +74,9 @@ public abstract class GhostApp : GhostAppBase
         try
         {
             await OnTickAsync();
+
+            // Report metrics after each tick for service apps
+            SendMetrics();
         }
         catch (Exception ex)
         {
@@ -98,7 +98,7 @@ public abstract class GhostApp : GhostAppBase
 
     private async Task StartServiceAsync()
     {
-        if (IsService && _tickTimer != null)
+        if (_tickTimer != null)
         {
             _tickTimer.Change(TimeSpan.Zero, TickInterval);
             G.LogInfo("Service started with {Interval}ms tick interval", TickInterval.TotalMilliseconds);
@@ -113,11 +113,8 @@ public abstract class GhostApp : GhostAppBase
         await _runLock.WaitAsync();
         try
         {
-            if (_hasRun && !IsService)
-                throw new InvalidOperationException("One-off app can only be run once");
-
-            if (_isRunning)
-                throw new InvalidOperationException("App is already running");
+            if (_hasRun && !IsServiceApp()) throw new InvalidOperationException("One-off app can only be run once");
+            if (_isRunning) throw new InvalidOperationException("App is already running");
 
             _isRunning = true;
             _hasRun = true;
@@ -130,10 +127,20 @@ public abstract class GhostApp : GhostAppBase
                 await OnBeforeRunAsync();
                 await RunAsync(args);
 
-                if (IsService)
+                // If this is a service app, start the tick timer
+                if (IsServiceApp())
                 {
                     await StartServiceAsync();
+
+                    // Report initial metrics
+                    SendMetrics();
+
                     await _stopSource.Task; // Wait for stop signal
+                }
+                else
+                {
+                    // For one-shot apps, send metrics once at completion
+                    SendMetrics();
                 }
 
                 await OnAfterRunAsync();
@@ -162,11 +169,19 @@ public abstract class GhostApp : GhostAppBase
     }
 
     /// <summary>
+    /// Determines if this is a service app based on config
+    /// </summary>
+    protected bool IsServiceApp()
+    {
+        return Config?.Core?.Type?.Equals("service", StringComparison.OrdinalIgnoreCase) ?? false;
+    }
+
+    /// <summary>
     /// Stops a running service
     /// </summary>
     public async virtual Task StopAsync()
     {
-        if (!_isRunning || !IsService) return;
+        if (!_isRunning || !IsServiceApp()) return;
 
         await _runLock.WaitAsync();
         try
@@ -183,6 +198,34 @@ public abstract class GhostApp : GhostAppBase
             _runLock.Release();
         }
     }
+    
+    public async Task SendMetrics()
+    {
+        try
+        {
+            // Create custom metrics for the app
+            var customMetrics = new Dictionary<string, double>
+            {
+                    // Add app-specific metrics here
+                    ["uptime"] = (DateTime.UtcNow - Process.GetCurrentProcess().StartTime.ToUniversalTime()).TotalSeconds
+            };
+
+            // Send metrics through the AutoMonitor
+            await Metrics.TrackMetricsAsync(customMetrics);
+
+            // Record the event
+            await Metrics.TrackEventAsync("metrics.sent", new Dictionary<string, string>
+            {
+                    ["appId"] = Config.App.Id,
+                    ["appType"] = Config.Core.Type ?? "one-shot",
+                    ["timestamp"] = DateTime.UtcNow.ToString("o")
+            });
+        }
+        catch (Exception ex)
+        {
+            G.LogError(ex, "Failed to send metrics");
+        }
+    }
 
     public override async ValueTask DisposeAsync()
     {
@@ -193,10 +236,12 @@ public abstract class GhostApp : GhostAppBase
             {
                 await StopAsync();
             }
+
             if (_tickTimer != null)
             {
                 await _tickTimer.DisposeAsync();
             }
+
             await base.DisposeAsync();
         }
         finally

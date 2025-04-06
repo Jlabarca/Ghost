@@ -1,3 +1,4 @@
+using Ghost;
 using Ghost.SDK;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -22,32 +23,39 @@ public class Program
     }
 }
 
-public class App : GhostApp
+public class App : GhostApp, IDisposable
 {
+    private readonly IServiceProvider _serviceProvider;
+    private readonly IConfiguration _configuration;
+
     public App()
     {
         // Configure as a service
         IsService = true;
-        TickInterval = TimeSpan.FromSeconds(5);
-        AutoRestart = true;
-    }
 
-    protected override void ConfigureServices(IServiceCollection services)
-    {
-        // Add configuration
-        var config = new ConfigurationBuilder()
+        // Build configuration
+        _configuration = new ConfigurationBuilder()
             .SetBasePath(Directory.GetCurrentDirectory())
             .AddJsonFile("appsettings.json", optional: false)
             .AddJsonFile($"appsettings.{Environment.GetEnvironmentVariable("GHOST_ENV") ?? "Development"}.json", optional: true)
             .AddEnvironmentVariables()
             .Build();
 
-        services.AddSingleton<IConfiguration>(config);
+        // Configure services
+        var services = new ServiceCollection();
+        ConfigureServices(services);
+        _serviceProvider = services.BuildServiceProvider();
 
-        // Add your services here
+        G.LogInfo("{{ safe_name }} service initialized");
+    }
+
+    protected virtual void ConfigureServices(IServiceCollection services)
+    {
+        // Add configuration
+        services.AddSingleton<IConfiguration>(_configuration);
+
+        // Register your services here
         // services.AddSingleton<IMyService, MyService>();
-
-        base.ConfigureServices(services);
     }
 
     public override async Task RunAsync(IEnumerable<string> args)
@@ -56,16 +64,14 @@ public class App : GhostApp
         await Task.CompletedTask;
     }
 
-    protected override async Task OnTickAsync()
+    public void Dispose()
     {
-        // Regular service work
-        G.LogDebug("Service heartbeat");
-        await Task.CompletedTask;
-    }
+        G.LogInfo("{{ safe_name }} service shutting down...");
 
-    protected override async Task OnAfterRunAsync()
-    {
-        G.LogInfo("Service shutting down...");
-        await Task.CompletedTask;
+        // Dispose services if needed
+        if (_serviceProvider is IDisposable disposable)
+        {
+            disposable.Dispose();
+        }
     }
 }

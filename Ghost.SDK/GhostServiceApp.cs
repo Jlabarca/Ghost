@@ -10,9 +10,6 @@ public abstract class GhostServiceApp : GhostApp
   /// </summary>
   protected GhostServiceApp()
   {
-    // Mark as a service
-    IsService = true;
-
     // Default settings for services
     TickInterval = TimeSpan.FromSeconds(1);
     AutoRestart = true;

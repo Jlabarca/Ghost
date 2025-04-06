@@ -14,7 +14,7 @@ public class NullGhostLogger : IGhostLogger
 
   public static NullGhostLogger Instance => _instance;
 
-  private NullGhostLogger() { }
+  public NullGhostLogger() { }
 
   public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
 

@@ -71,6 +71,8 @@ public static class CommandRegistry
 
     private static readonly List<CommandDefinition> _commands = new()
     {
+            new(typeof(VersionCommand), "version", "Display version information", "version"),
+
             new(typeof(CreateCommand), "create", "Create a new Ghost app project",
                     "create myapp", "create myapp --template service"),
             new(typeof(RunCommand), "run", "Run a Ghost app",

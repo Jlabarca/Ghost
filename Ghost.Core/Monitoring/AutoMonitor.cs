@@ -2,6 +2,7 @@ using Ghost;
 using Ghost.Core.Storage;
 using Ghost.SDK;
 using System.Diagnostics;
+
 /// <summary>
 /// Automatically collects and reports standard system metrics
 /// to GhostFather without requiring manual app intervention
@@ -11,11 +12,11 @@ public class AutoMonitor : IAutoMonitor
     private readonly IGhostBus _bus;
     private readonly string _appId;
     private readonly string _appName;
+    private readonly string _appType;
     private readonly Timer _metricsTimer;
     private readonly CancellationTokenSource _cts = new();
     private readonly List<Func<Dictionary<string, double>>> _customMetricsProviders = new();
     private readonly SemaphoreSlim _lock = new(1, 1);
-
     private TimeSpan _interval = TimeSpan.FromSeconds(10);
     private bool _isRunning;
     private bool _disposed;
@@ -31,15 +32,16 @@ public class AutoMonitor : IAutoMonitor
     /// <param name="bus">Message bus for sending metrics</param>
     /// <param name="appId">Unique application ID</param>
     /// <param name="appName">Application name</param>
-    public AutoMonitor(IGhostBus bus, string appId, string appName)
+    /// <param name="appType">Application type: "service" or "one-shot"</param>
+    public AutoMonitor(IGhostBus bus, string appId, string appName, string appType = "one-shot")
     {
         _bus = bus ?? throw new ArgumentNullException(nameof(bus));
         _appId = appId ?? throw new ArgumentNullException(nameof(appId));
         _appName = appName ?? throw new ArgumentNullException(nameof(appName));
+        _appType = appType ?? "one-shot";
 
         // Initialize timer but don't start it yet
-        _metricsTimer = new Timer(_ => CollectAndSendMetricsAsync().ConfigureAwait(false),
-            null, Timeout.InfiniteTimeSpan, Timeout.InfiniteTimeSpan);
+        _metricsTimer = new Timer(_ => CollectAndSendMetricsAsync().ConfigureAwait(false), null, Timeout.InfiniteTimeSpan, Timeout.InfiniteTimeSpan);
     }
 
     /// <inheritdoc/>
@@ -49,7 +51,6 @@ public class AutoMonitor : IAutoMonitor
         try
         {
             if (_isRunning || _disposed) return;
-
             _isRunning = true;
 
             // Initial CPU measurement
@@ -57,7 +58,6 @@ public class AutoMonitor : IAutoMonitor
 
             // Start the timer
             _metricsTimer.Change(TimeSpan.Zero, _interval);
-
             G.LogDebug($"AutoMonitor started for {_appName} ({_appId}) with interval {_interval.TotalSeconds}s");
         }
         finally
@@ -73,10 +73,8 @@ public class AutoMonitor : IAutoMonitor
         try
         {
             if (!_isRunning) return;
-
             _isRunning = false;
             await _metricsTimer.DisposeAsync();
-
             G.LogDebug($"AutoMonitor stopped for {_appName} ({_appId})");
         }
         finally
@@ -89,18 +87,17 @@ public class AutoMonitor : IAutoMonitor
     public async Task TrackEventAsync(string eventName, Dictionary<string, string>? properties = null)
     {
         if (_disposed) throw new ObjectDisposedException(nameof(AutoMonitor));
-
         try
         {
             var eventData = new
             {
                 Id = _appId,
                 AppName = _appName,
+                AppType = _appType,
                 EventName = eventName,
                 Properties = properties ?? new Dictionary<string, string>(),
                 Timestamp = DateTime.UtcNow
             };
-
             await _bus.PublishAsync("ghost:events", eventData);
         }
         catch (Exception ex)
@@ -110,15 +107,50 @@ public class AutoMonitor : IAutoMonitor
     }
 
     /// <inheritdoc/>
+    public async Task TrackMetricsAsync(Dictionary<string, double>? customMetrics = null)
+    {
+        if (_disposed) throw new ObjectDisposedException(nameof(AutoMonitor));
+        try
+        {
+            // Collect standard system metrics
+            var metrics = CollectSystemMetrics();
+
+            // Add custom metrics
+            if (customMetrics != null)
+            {
+                foreach (var (key, value) in customMetrics)
+                {
+                    metrics[$"custom.{key}"] = value;
+                }
+            }
+
+            // Add app type as a metric property
+            metrics["app.type"] = _appType == "service" ? 1.0 : 0.0;
+
+            // Send metrics to GhostFather
+            var message = new
+            {
+                Id = _appId,
+                AppName = _appName,
+                AppType = _appType,
+                Metrics = metrics,
+                Timestamp = DateTime.UtcNow
+            };
+            await _bus.PublishAsync($"ghost:metrics:{_appId}", message);
+        }
+        catch (Exception ex)
+        {
+            G.LogError(ex, "Error collecting or sending metrics");
+        }
+    }
+
+    /// <inheritdoc/>
     public void SetCollectionInterval(TimeSpan interval)
     {
-        if (interval <= TimeSpan.Zero)
-            throw new ArgumentException("Interval must be positive", nameof(interval));
-
+        if (interval <= TimeSpan.Zero) throw new ArgumentException("Interval must be positive", nameof(interval));
         if (_disposed) throw new ObjectDisposedException(nameof(AutoMonitor));
 
         _interval = interval;
-
         if (_isRunning)
         {
             _metricsTimer.Change(interval, interval);
@@ -167,10 +199,10 @@ public class AutoMonitor : IAutoMonitor
             {
                 Id = _appId,
                 AppName = _appName,
+                AppType = _appType,
                 Metrics = metrics,
                 Timestamp = DateTime.UtcNow
             };
-
             await _bus.PublishAsync($"ghost:metrics:{_appId}", message);
         }
         catch (Exception ex)
@@ -214,7 +246,6 @@ public class AutoMonitor : IAutoMonitor
             {
                 var elapsedTime = now - _lastCpuCheck;
                 var elapsedCpu = currentCpuTotal - _lastCpuTotal;
-
                 _currentCpuPercent = elapsedCpu.TotalSeconds / (Environment.ProcessorCount * elapsedTime.TotalSeconds) * 100;
                 _currentCpuPercent = Math.Round(_currentCpuPercent, 2);
             }
@@ -237,7 +268,6 @@ public class AutoMonitor : IAutoMonitor
         try
         {
             if (_disposed) return;
-
             _disposed = true;
             _isRunning = false;
 

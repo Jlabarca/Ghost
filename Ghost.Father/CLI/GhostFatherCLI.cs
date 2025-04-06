@@ -21,8 +21,8 @@ public class GhostFatherCLI : GhostServiceApp
 
     private void ConfigureServices()
     {
+        Services.AddSingleton<IServiceCollection>(Services);
         Services.AddSingleton(_ => new TemplateManager(Path.Combine(AppContext.BaseDirectory, "templates")));
-        Services.AddSingleton(Services);
 
         // Register all commands
         CommandRegistry.RegisterServices(Services);

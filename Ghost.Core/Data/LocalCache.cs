@@ -10,7 +10,7 @@ public class LocalCache : ICache
     private readonly string _cachePath;
     private readonly ConcurrentDictionary<string, CacheEntry<object>> _cache;
     private readonly ConcurrentDictionary<string, SemaphoreSlim> _fileLocks;
-    private readonly SemaphoreSlim _globalLock = new(1, 1);
+    private readonly SemaphoreSlim _globalLock = new SemaphoreSlim(1, 1);
     private readonly Timer _cleanupTimer;
     private bool _disposed;
 
@@ -195,6 +195,13 @@ public class LocalCache : ICache
         {
             _globalLock.Release();
         }
+    }
+    public async Task<List<T>> GetAllAsync<T>(T channelsActive)
+    {
+        return await Task.FromResult(_cache.Values
+            .Where(entry => entry.TypeName == typeof(T).FullName)
+            .Select(entry => (T)entry.Value)
+            .ToList());
     }
 
     private SemaphoreSlim GetFileLock(string key) =>

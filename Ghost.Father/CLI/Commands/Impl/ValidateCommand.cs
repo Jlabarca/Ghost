@@ -1,11 +1,7 @@
 using Ghost.Core.Storage;
-using Ghost.Core.Exceptions;
 using Ghost.Core.Monitoring;
 using Ghost.Core.Data;
-using Ghost.Core.Logging;
-using Ghost.Templates;
 using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.Logging;
 using Spectre.Console;
 using Spectre.Console.Cli;
 using System.ComponentModel;
@@ -143,7 +139,7 @@ public class ValidateCommand : AsyncCommand<ValidateCommand.Settings>
       table.AddRow(
           "[blue]Commands[/]",
           Emoji.Known.CrossMark + " [red]Failed[/]",
-          $"{errors} errors, {warnings.Count} warnings"
+          $"{errors.Count} errors, {warnings.Count} warnings"
       );
 
       if (settings.Verbose)
@@ -628,6 +624,7 @@ public class ValidateCommand : AsyncCommand<ValidateCommand.Settings>
       {
           CommandId = Guid.NewGuid().ToString(),
           CommandType = "ping",
+          TargetProcessId = "system"
       };
 
       await _bus.PublishAsync("ghost:commands", command);

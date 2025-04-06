@@ -1,51 +1,275 @@
-using Ghost.Core;
 using Ghost.Core.Config;
-using Ghost.Core.Exceptions;
-using Microsoft.Extensions.DependencyInjection;
-using System.Diagnostics;
+using Ghost.Core.Modules;
+using Ghost.Core.Monitoring;
+using Ghost.Father;
+
 namespace Ghost.SDK;
 
-/// <summary>
-/// Base class for Ghost apps that supports both one-off tasks and long-running services.
-/// </summary>
-public abstract class GhostApp : GhostAppBase
+public class GhostApp : IAsyncDisposable
 {
-    private readonly SemaphoreSlim _runLock = new(1, 1);
-    private bool _isRunning;
-    private bool _hasRun;
-    private readonly Timer? _tickTimer;
-    private readonly TaskCompletionSource _stopSource = new();
+    /// <summary>
+    /// Configuration for the app
+    /// </summary>
+    public GhostConfig Config { get; private set; }
 
-    // Service configuration
-    protected TimeSpan TickInterval { get; set; } = TimeSpan.FromSeconds(1);
-    protected bool AutoRestart { get; set; }
-    protected int MaxRestartAttempts { get; set; } = 3;
-    protected TimeSpan RestartDelay { get; set; } = TimeSpan.FromSeconds(5);
+    /// <summary>
+    /// Is this a long-running service
+    /// </summary>
+    public bool IsService { get; protected set; }
 
-    protected GhostApp(GhostConfig config = null) : base(config)
+    /// <summary>
+    /// Should the app automatically connect to GhostFather
+    /// </summary>
+    public bool AutoGhostFather { get; protected set; } = true;
+
+    /// <summary>
+    /// Should the app automatically report metrics
+    /// </summary>
+    public bool AutoMonitor { get; protected set; } = true;
+
+
+    internal GhostFatherConnection Connection { get; private set; }
+    private CancellationTokenSource _cts = new CancellationTokenSource();
+    private Timer _tickTimer;
+
+    /// <summary>
+    /// Time between tick events for periodic processing
+    /// </summary>
+    public TimeSpan TickInterval { get; protected set; } = TimeSpan.FromSeconds(5);
+
+
+    /// <summary>
+    /// Should the app automatically restart on failure
+    /// </summary>
+    public bool AutoRestart { get; protected set; }
+
+    /// <summary>
+    /// Maximum number of restart attempts (0 = unlimited)
+    /// </summary>
+    public int MaxRestartAttempts { get; protected set; }
+
+    public GhostApp(GhostConfig config = null)
     {
-        GhostFather.SetCurrent(this);
-        Services.BuildServiceProvider();
+        // Load config or use provided
+        Config = config ?? LoadConfigFromYaml();
 
-        _tickTimer = new Timer(OnTickCallback, null, Timeout.InfiniteTimeSpan, Timeout.InfiniteTimeSpan);
+        // Apply settings
+        ApplyConfigSettings();
+
+        // Initialize Ghost services
+        Ghost.Init(this);
+
+        G.LogInfo($"Initialized GhostApp: {GetType().Name}");
+    }
+
+    private GhostConfig LoadConfigFromYaml()
+    {
+        try
+        {
+            // Look for .ghost.yaml in the current directory
+            var yamlPath = Path.Combine(Directory.GetCurrentDirectory(), ".ghost.yaml");
+            if (File.Exists(yamlPath))
+            {
+                G.LogDebug($"Loading config from: {yamlPath}");
+                // In a real implementation, parse YAML properly
+                // For now, create a minimal default config
+                return new GhostConfig
+                {
+                        App = new AppInfo
+                        {
+                                Id = Path.GetFileName(Directory.GetCurrentDirectory()),
+                                Name = Path.GetFileName(Directory.GetCurrentDirectory()),
+                                Description = "Ghost Application",
+                                Version = "1.0.0"
+                        },
+                        Core = new CoreConfig
+                        {
+                                Mode = "development",
+                                LogsPath = "logs",
+                                DataPath = "data"
+                        },
+                        Modules = new Dictionary<string, ModuleConfig>()
+                };
+            }
+        }
+        catch (Exception ex)
+        {
+            G.LogWarn($"Failed to load config from .ghost.yaml: {ex.Message}");
+        }
+
+        // Return default config if no file found or error occurred
+        return new GhostConfig
+        {
+                App = new AppInfo
+                {
+                        Id = Path.GetFileName(Directory.GetCurrentDirectory()),
+                        Name = Path.GetFileName(Directory.GetCurrentDirectory()),
+                        Description = "Ghost Application",
+                        Version = "1.0.0"
+                },
+                Core = new CoreConfig
+                {
+                        Mode = "development",
+                        LogsPath = "logs",
+                        DataPath = "data"
+                },
+                Modules = new Dictionary<string, ModuleConfig>()
+        };
+    }
+
+    private void ApplyConfigSettings()
+    {
+        try
+        {
+            // Read settings from config.Core.Settings if available
+            if (Config.Core != null)
+            {
+                // Check for autoGhostFather setting
+                if (Config.Core.Settings.TryGetValue("autoGhostFather", out var autoGF))
+                {
+                    AutoGhostFather = !string.Equals(autoGF, "false", StringComparison.OrdinalIgnoreCase);
+                }
+
+                // Check for autoMonitor setting
+                if (Config.Core.Settings.TryGetValue("autoMonitor", out var autoMon))
+                {
+                    AutoMonitor = !string.Equals(autoMon, "false", StringComparison.OrdinalIgnoreCase);
+                }
+
+                // Check for isService setting
+                if (Config.Core.Settings.TryGetValue("isService", out var isService))
+                {
+                    IsService = string.Equals(isService, "true", StringComparison.OrdinalIgnoreCase);
+                }
+
+                // Check for autoRestart setting
+                if (Config.Core.Settings.TryGetValue("autoRestart", out var autoRestart))
+                {
+                    AutoRestart = string.Equals(autoRestart, "true", StringComparison.OrdinalIgnoreCase);
+                }
+
+                // Check for maxRestartAttempts setting
+                if (Config.Core.Settings.TryGetValue("maxRestartAttempts", out var maxRestarts) &&
+                    int.TryParse(maxRestarts, out var maxRestartsValue))
+                {
+                    MaxRestartAttempts = maxRestartsValue;
+                }
+
+                // Check for tickInterval setting
+                if (Config.Core.Settings.TryGetValue("tickInterval", out var tickInterval) &&
+                    int.TryParse(tickInterval, out var tickIntervalValue))
+                {
+                    TickInterval = TimeSpan.FromSeconds(tickIntervalValue);
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            G.LogWarn($"Error applying config settings: {ex.Message}");
+        }
+    }
+
+    private void InitializeGhostFatherConnection()
+    {
+        try
+        {
+            G.LogDebug("Initializing connection to GhostFather...");
+
+            // Create metadata for the process
+            var metadata = new ProcessMetadata(
+                    Name: Config.App.Name ?? GetType().Name,
+                    Type: IsService ? "service" : "app",
+                    Version: Config.App.Version ?? "1.0.0",
+                    Environment: new Dictionary<string, string>(),
+                    Configuration: new Dictionary<string, string>
+                    {
+                            ["AppType"] = IsService ? "service" : "one-shot"
+                    }
+            );
+
+            // Create connection
+            Connection = new GhostFatherConnection(metadata);
+
+            // Start reporting if auto-monitor is enabled
+            if (AutoMonitor)
+            {
+                Connection.StartReporting();
+            }
+
+            G.LogInfo($"Connected to GhostFather: {Config.App.Id}");
+        }
+        catch (Exception ex)
+        {
+            G.LogWarn($"Failed to connect to GhostFather: {ex.Message}");
+        }
     }
 
     /// <summary>
-    /// Main execution method. For one-off apps, this runs once.
-    /// For services, this sets up any initial state before ticking begins.
+    /// Main execution method for the application
     /// </summary>
-    public abstract Task RunAsync(IEnumerable<string> args);
+    public async Task ExecuteAsync(IEnumerable<string> args)
+    {
+        try
+        {
+            // Call lifecycle hooks
+            await OnBeforeRunAsync();
+
+            // Log start
+            G.LogInfo($"Starting {GetType().Name}...");
+
+            // Report running state
+            if (Connection != null && AutoMonitor)
+            {
+                await Connection.ReportHealthAsync("Starting", "Application is starting");
+            }
+
+            // Start tick timer if this is a service
+            if (IsService && TickInterval > TimeSpan.Zero)
+            {
+                _tickTimer = new Timer(OnTickCallback, null, TimeSpan.Zero, TickInterval);
+            }
+
+            // Run the application
+            await RunAsync(args);
+
+            // Report completed state for one-shot apps
+            if (!IsService && Connection != null && AutoMonitor)
+            {
+                await Connection.ReportHealthAsync("Completed", "Application completed successfully");
+            }
+
+            // Call lifecycle hooks
+            await OnAfterRunAsync();
+        }
+        catch (Exception ex)
+        {
+            G.LogError(ex, $"Error executing {GetType().Name}");
+
+            // Report error
+            if (Connection != null && AutoMonitor)
+            {
+                await Connection.ReportHealthAsync("Error", $"Application error: {ex.Message}");
+            }
+
+            // Call error handler
+            await OnErrorAsync(ex);
+
+            // Rethrow for upper layers
+            throw;
+        }
+    }
 
     /// <summary>
-    /// Optional service tick method. Override this to implement service behavior.
+    /// Main execution logic - override in derived classes
     /// </summary>
-    protected virtual Task OnTickAsync()
+    public virtual Task RunAsync(IEnumerable<string> args)
     {
+        G.LogInfo($"Running Ghost application: {GetType().Name}");
         return Task.CompletedTask;
     }
 
     /// <summary>
-    /// Called before RunAsync(). Override to add initialization logic.
+    /// Called before the main Run method
     /// </summary>
     protected virtual Task OnBeforeRunAsync()
     {
@@ -53,7 +277,7 @@ public abstract class GhostApp : GhostAppBase
     }
 
     /// <summary>
-    /// Called after RunAsync() or when service stops. Override to add cleanup logic.
+    /// Called after the main Run method
     /// </summary>
     protected virtual Task OnAfterRunAsync()
     {
@@ -61,193 +285,86 @@ public abstract class GhostApp : GhostAppBase
     }
 
     /// <summary>
-    /// Called if an error occurs. Override to add custom error handling.
+    /// Called when an error occurs during execution
     /// </summary>
     protected virtual Task OnErrorAsync(Exception ex)
     {
-        G.LogError(ex, "Error in {Type}", GetType().Name);
         return Task.CompletedTask;
     }
 
-    private async void OnTickCallback(object? state)
+    /// <summary>
+    /// Called periodically for service apps
+    /// </summary>
+    protected virtual Task OnTickAsync()
+    {
+        return Task.CompletedTask;
+    }
+
+    private async void OnTickCallback(object state)
     {
         try
         {
             await OnTickAsync();
 
-            // Report metrics after each tick for service apps
-            SendMetrics();
+            // Report heartbeat
+            if (Connection != null && AutoMonitor)
+            {
+                await Connection.ReportMetricsAsync();
+            }
         }
         catch (Exception ex)
         {
-            await OnErrorAsync(ex);
-            if (AutoRestart && MaxRestartAttempts > 0)
-            {
-                MaxRestartAttempts--;
-                G.LogWarn("Restarting service after error ({Attempts} attempts remaining)", MaxRestartAttempts);
-                await Task.Delay(RestartDelay);
-                await StartServiceAsync();
-            }
-            else
-            {
-                G.LogError("Service stopped due to error");
-                await StopAsync();
-            }
+            G.LogError(ex, "Error in tick callback");
         }
     }
 
-    private async Task StartServiceAsync()
+    /// <summary>
+    /// Stop the application
+    /// </summary>
+    public virtual async Task StopAsync()
     {
+        G.LogInfo($"Stopping {GetType().Name}...");
+
+        // Cancel any operations
+        _cts.Cancel();
+
+        // Stop tick timer
         if (_tickTimer != null)
         {
-            _tickTimer.Change(TimeSpan.Zero, TickInterval);
-            G.LogInfo("Service started with {Interval}ms tick interval", TickInterval.TotalMilliseconds);
+            await _tickTimer.DisposeAsync();
+            _tickTimer = null;
+        }
+
+        // Report stopping state
+        if (Connection != null && AutoMonitor)
+        {
+            await Connection.ReportHealthAsync("Stopping", "Application is stopping");
         }
     }
 
     /// <summary>
-    /// Executes the app with lifecycle management
+    /// Cleanup resources
     /// </summary>
-    public async Task<bool> ExecuteAsync(IEnumerable<string> args)
+    public async ValueTask DisposeAsync()
     {
-        await _runLock.WaitAsync();
+        // Stop the application if it's still running
         try
         {
-            if (_hasRun && !IsServiceApp()) throw new InvalidOperationException("One-off app can only be run once");
-            if (_isRunning) throw new InvalidOperationException("App is already running");
-
-            _isRunning = true;
-            _hasRun = true;
-
-            await InitializeAsync();
-            G.LogInfo("Starting {Type}", GetType().Name);
-
-            try
-            {
-                await OnBeforeRunAsync();
-                await RunAsync(args);
-
-                // If this is a service app, start the tick timer
-                if (IsServiceApp())
-                {
-                    await StartServiceAsync();
-
-                    // Report initial metrics
-                    SendMetrics();
-
-                    await _stopSource.Task; // Wait for stop signal
-                }
-                else
-                {
-                    // For one-shot apps, send metrics once at completion
-                    SendMetrics();
-                }
-
-                await OnAfterRunAsync();
-                G.LogInfo("{Type} completed successfully", GetType().Name);
-                return true;
-            }
-            catch (Exception ex)
-            {
-                await OnErrorAsync(ex);
-                throw new GhostException(
-                    $"App execution failed: {GetType().Name}",
-                    ex,
-                    ErrorCode.ProcessError
-                );
-            }
-            finally
-            {
-                _isRunning = false;
-                await ShutdownAsync();
-            }
-        }
-        finally
-        {
-            _runLock.Release();
-        }
-    }
-
-    /// <summary>
-    /// Determines if this is a service app based on config
-    /// </summary>
-    protected bool IsServiceApp()
-    {
-        return Config?.Core?.Type?.Equals("service", StringComparison.OrdinalIgnoreCase) ?? false;
-    }
-
-    /// <summary>
-    /// Stops a running service
-    /// </summary>
-    public async virtual Task StopAsync()
-    {
-        if (!_isRunning || !IsServiceApp()) return;
-
-        await _runLock.WaitAsync();
-        try
-        {
-            if (_tickTimer != null)
-            {
-                await _tickTimer.DisposeAsync();
-            }
-            _stopSource.TrySetResult();
-            G.LogInfo("Service stopped");
-        }
-        finally
-        {
-            _runLock.Release();
-        }
-    }
-    
-    public async Task SendMetrics()
-    {
-        try
-        {
-            // Create custom metrics for the app
-            var customMetrics = new Dictionary<string, double>
-            {
-                    // Add app-specific metrics here
-                    ["uptime"] = (DateTime.UtcNow - Process.GetCurrentProcess().StartTime.ToUniversalTime()).TotalSeconds
-            };
-
-            // Send metrics through the AutoMonitor
-            await Metrics.TrackMetricsAsync(customMetrics);
-
-            // Record the event
-            await Metrics.TrackEventAsync("metrics.sent", new Dictionary<string, string>
-            {
-                    ["appId"] = Config.App.Id,
-                    ["appType"] = Config.Core.Type ?? "one-shot",
-                    ["timestamp"] = DateTime.UtcNow.ToString("o")
-            });
+            await StopAsync();
         }
         catch (Exception ex)
         {
-            G.LogError(ex, "Failed to send metrics");
+            G.LogError(ex, "Error stopping application during dispose");
         }
-    }
 
-    public override async ValueTask DisposeAsync()
-    {
-        await _runLock.WaitAsync();
-        try
+        // Dispose connection
+        if (Connection != null)
         {
-            if (_isRunning)
-            {
-                await StopAsync();
-            }
-
-            if (_tickTimer != null)
-            {
-                await _tickTimer.DisposeAsync();
-            }
-
-            await base.DisposeAsync();
+            await Connection.DisposeAsync();
+            Connection = null;
         }
-        finally
-        {
-            _runLock.Release();
-            _runLock.Dispose();
-        }
+
+        // Dispose cancellation token source
+        _cts.Dispose();
     }
 }

@@ -1,268 +1,406 @@
 using Ghost.Core.Data;
-using Ghost.Core.Exceptions;
+using System;
 using System.Collections.Concurrent;
+using System.Collections.Generic;
+using System.Linq;
 using System.Runtime.CompilerServices;
 using System.Text.Json;
+using System.Text.RegularExpressions;
+using System.Threading;
+using System.Threading.Tasks;
+using Ghost.Core.Exceptions;
+using System.Threading.Channels;
 
-namespace Ghost.Core.Storage;
-
-/// <summary>
-/// Interface for message bus operations
-/// </summary>
-public interface IGhostBus : IAsyncDisposable
+namespace Ghost.Core.Storage
 {
-    Task PublishAsync<T>(string channel, T message, TimeSpan? expiry = null);
-    IAsyncEnumerable<T> SubscribeAsync<T>(string channel, CancellationToken ct = default);
-    Task UnsubscribeAsync(string channel);
-    Task<long> GetSubscriberCountAsync(string channel);
-    Task<IEnumerable<string>> GetActiveChannelsAsync();
-    Task ClearChannelAsync(string channel);
-    Task<bool> IsAvailableAsync();
-
-    Task UnsubscribeAllAsync();
-}
-
-/// <summary>
-/// Message bus implementation using the cache system for pub/sub
-/// </summary>
-public class GhostBus : IGhostBus
-{
-    private readonly ICache _cache;
-    private readonly ConcurrentDictionary<string, ConcurrentBag<ChannelMessageQueue>> _subscriptions;
-    private readonly SemaphoreSlim _lock = new(1, 1);
-    private bool _disposed;
-
-    public GhostBus(ICache cache)
+    /// <summary>
+    /// Message bus implementation for pub/sub communication using ICache as a backing store
+    /// </summary>
+    public class GhostBus : IGhostBus
     {
-        _cache = cache ?? throw new ArgumentNullException(nameof(cache));
-        _subscriptions = new ConcurrentDictionary<string, ConcurrentBag<ChannelMessageQueue>>();
-    }
+        private readonly ICache _cache;
+        private readonly ConcurrentDictionary<string, CancellationTokenSource> _subscriptions = new();
+        private readonly SemaphoreSlim _lock = new(1, 1);
+        private readonly ConcurrentDictionary<string, List<Action<string, string>>> _callbacks = new();
+        private readonly TimeSpan _pollInterval = TimeSpan.FromMilliseconds(100);
+        private readonly Timer _cleanupTimer;
+        private readonly object _lastTopicLock = new();
+        private string _lastTopic;
+        private bool _isDisposed;
 
-    public async Task PublishAsync<T>(string channel, T message, TimeSpan? expiry = null)
-    {
-        if (_disposed) throw new ObjectDisposedException(nameof(GhostBus));
-        if (string.IsNullOrEmpty(channel))
-            throw new ArgumentException("Channel cannot be empty", nameof(channel));
-
-        try
+        /// <summary>
+        /// Create a new message bus using the specified cache
+        /// </summary>
+        /// <param name="cache">Cache provider for message storage</param>
+        public GhostBus(ICache cache)
         {
-            var serialized = JsonSerializer.Serialize(message);
-            var messageId = Guid.NewGuid().ToString();
-            var messageKey = $"message:{channel}:{messageId}";
-
-            // Store message
-            await _cache.SetAsync(messageKey, serialized, expiry ?? TimeSpan.FromHours(1));
-
-            // Notify subscribers
-            if (_subscriptions.TryGetValue(channel, out var queues))
-            {
-                foreach (var queue in queues)
-                {
-                    queue.Enqueue(serialized);
-                }
-            }
-
-            G.LogDebug("Published message to channel: {0}", channel);
+            _cache = cache ?? throw new ArgumentNullException(nameof(cache));
+            _cleanupTimer = new Timer(CleanupCallback, null, TimeSpan.FromMinutes(5), TimeSpan.FromMinutes(5));
         }
-        catch (Exception ex)
+
+        /// <summary>
+        /// Publish a message to the specified channel
+        /// </summary>
+        public async Task PublishAsync<T>(string channel, T message, TimeSpan? expiry = null)
         {
-            G.LogError("Failed to publish message to channel: {0}", ex, channel);
-            throw new GhostException(
-                $"Failed to publish message to channel: {channel}",
-                ex,
-                ErrorCode.StorageOperationFailed);
-        }
-    }
+            if (_isDisposed) throw new ObjectDisposedException(nameof(GhostBus));
+            if (string.IsNullOrWhiteSpace(channel)) throw new ArgumentException("Channel cannot be empty", nameof(channel));
+            if (message == null) throw new ArgumentNullException(nameof(message));
 
-    public async IAsyncEnumerable<T> SubscribeAsync<T>(
-        string channel,
-        [EnumeratorCancellation] CancellationToken ct = default)
-    {
-        if (_disposed) throw new ObjectDisposedException(nameof(GhostBus));
-        if (string.IsNullOrEmpty(channel))
-            throw new ArgumentException("Channel cannot be empty", nameof(channel));
-
-        var queue = new ChannelMessageQueue();
-
-        try
-        {
-            // Add subscription
-            var queues = _subscriptions.GetOrAdd(channel, _ => new ConcurrentBag<ChannelMessageQueue>());
-            queues.Add(queue);
-
-            G.LogDebug("Subscribed to channel: {0}", channel);
-
-            while (!ct.IsCancellationRequested)
+            try
             {
-                T item = default;
-                if (queue.TryDequeue(out var message))
-                {
-                    try
-                    {
-                        item = JsonSerializer.Deserialize<T>(message) ?? throw new InvalidOperationException();
-                    }
-                    catch (JsonException ex)
-                    {
-                        G.LogWarn("Failed to deserialize message from channel {0}: {1}", channel, ex.Message);
-                    }
+                // Serialize message
+                string serialized = JsonSerializer.Serialize(message);
 
-                    yield return item;
+                // Generate unique message ID (timestamp:guid)
+                string messageId = $"{DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()}:{Guid.NewGuid()}";
+
+                // Store message with channel prefix
+                string key = $"message:{channel}:{messageId}";
+                await _cache.SetAsync(key, serialized);
+
+                // Set expiration if provided
+                if (expiry.HasValue)
+                {
+                    await _cache.ExpireAsync(key, expiry.Value);
                 }
                 else
                 {
-                    await Task.Delay(100, ct);
+                    // Default expiry time is 1 hour
+                    await _cache.ExpireAsync(key, TimeSpan.FromHours(1));
                 }
+
+                // Store channel in active channels set
+                await _cache.SetAsync("channels:active", channel);
+
+                // Store latest message ID for the channel
+                await _cache.SetAsync($"channel:{channel}:last", messageId);
+
+                // Notify all subscribers
+                NotifySubscribers(channel, messageId);
+            }
+            catch (Exception ex)
+            {
+                throw new GhostException("Failed to publish message", ex, ErrorCode.StorageConnectionFailed);
             }
         }
-        finally
-        {
-            // Clean up subscription
-            if (_subscriptions.TryGetValue(channel, out var existingQueues))
-            {
-                var updated = new ConcurrentBag<ChannelMessageQueue>(
-                    existingQueues.Where(q => q != queue));
 
-                if (updated.IsEmpty)
+        /// <summary>
+        /// Subscribe to messages on the specified channel or pattern
+        /// </summary>
+        public async IAsyncEnumerable<T> SubscribeAsync<T>(string channelPattern, [EnumeratorCancellation] CancellationToken cancellationToken = default)
+        {
+            if (_isDisposed) throw new ObjectDisposedException(nameof(GhostBus));
+            if (string.IsNullOrWhiteSpace(channelPattern)) throw new ArgumentException("Channel pattern cannot be empty", nameof(channelPattern));
+
+            // Create subscription ID
+            string subscriptionId = $"{channelPattern}:{Guid.NewGuid()}";
+
+            // Create cancellation token source linked to the provided token
+            var linkedSource = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+
+            // Register subscription
+            _subscriptions[subscriptionId] = linkedSource;
+
+            // Create a channel to receive messages
+            var channel = Channel.CreateUnbounded<(string, string)>(new UnboundedChannelOptions
+            {
+                SingleReader = true,
+                SingleWriter = false
+            });
+
+            // Register callback for the pattern
+            RegisterCallback(channelPattern, (topic, messageId) => channel.Writer.TryWrite((topic, messageId)));
+
+            try
+            {
+                // Process any existing messages first (catch-up)
+                await ProcessExistingMessagesAsync<T>(channelPattern, channel.Writer, linkedSource.Token);
+
+                // Process new messages as they arrive
+                while (!linkedSource.Token.IsCancellationRequested)
                 {
-                    _subscriptions.TryRemove(channel, out _);
+
+                        if (await channel.Reader.WaitToReadAsync(linkedSource.Token))
+                        {
+                            while (channel.Reader.TryRead(out var item))
+                            {
+                                var (topic, messageId) = item;
+
+                                // Store the last topic for reference
+                                lock (_lastTopicLock)
+                                {
+                                    _lastTopic = topic;
+                                }
+
+
+                                // Get the message from cache
+                                string key = $"message:{topic}:{messageId}";
+                                string json = await _cache.GetAsync<string>(key);
+
+                                if (!string.IsNullOrEmpty(json))
+                                {
+                                    // Deserialize and yield the message
+                                    T message = JsonSerializer.Deserialize<T>(json);
+                                    yield return message;
+                                }
+                            }
+                        }
                 }
-                else
+            }
+            finally
+            {
+                // Clean up subscription
+                _subscriptions.TryRemove(subscriptionId, out _);
+                linkedSource.Dispose();
+
+                // Unregister callback
+                UnregisterCallback(channelPattern);
+
+                // Complete channel
+                channel.Writer.TryComplete();
+            }
+        }
+
+        /// <summary>
+        /// Process existing messages for a channel pattern
+        /// </summary>
+        private async Task ProcessExistingMessagesAsync<T>(string channelPattern, ChannelWriter<(string, string)> writer, CancellationToken cancellationToken)
+        {
+            try
+            {
+                // Get active channels
+                var channels = await _cache.GetAllAsync<string>("channels:active");
+
+                // Filter channels that match the pattern
+                var matchingChannels = channels.Where(ch => MatchesPattern(ch, channelPattern)).ToList();
+
+                foreach (var channel in matchingChannels)
                 {
-                    _subscriptions.TryUpdate(channel, updated, existingQueues);
+                    // Get latest message ID for the channel
+                    string lastMessageId = await _cache.GetAsync<string>($"channel:{channel}:last", cancellationToken);
+
+                    if (!string.IsNullOrEmpty(lastMessageId))
+                    {
+                        // Add to processing queue
+                        writer.TryWrite((channel, lastMessageId));
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                G.LogWarn($"Error processing existing messages for pattern {channelPattern}: {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// Unsubscribe from a channel or pattern
+        /// </summary>
+        public async Task UnsubscribeAsync(string channelPattern)
+        {
+            if (_isDisposed) throw new ObjectDisposedException(nameof(GhostBus));
+            if (string.IsNullOrWhiteSpace(channelPattern)) throw new ArgumentException("Channel pattern cannot be empty", nameof(channelPattern));
+
+            await _lock.WaitAsync();
+            try
+            {
+                // Find all subscriptions for the pattern
+                var subscriptionIds = _subscriptions.Keys.Where(k => k.StartsWith(channelPattern + ":")).ToList();
+
+                // Cancel all subscriptions
+                foreach (var id in subscriptionIds)
+                {
+                    if (_subscriptions.TryRemove(id, out var cts))
+                    {
+                        cts.Cancel();
+                        cts.Dispose();
+                    }
+                }
+
+                // Unregister callbacks
+                UnregisterCallback(channelPattern);
+            }
+            finally
+            {
+                _lock.Release();
+            }
+        }
+
+        /// <summary>
+        /// Check if the message bus is available
+        /// </summary>
+        public async Task<bool> IsAvailableAsync()
+        {
+            if (_isDisposed) return false;
+
+            try
+            {
+                // Try to set and get a test value
+                string testKey = $"ghost:bus:test:{Guid.NewGuid()}";
+                string testValue = Guid.NewGuid().ToString();
+
+                await _cache.SetAsync(testKey, testValue, TimeSpan.FromSeconds(5));
+                string result = await _cache.GetAsync<string>(testKey);
+
+                return testValue == result;
+            }
+            catch (Exception ex)
+            {
+                G.LogWarn($"Message bus unavailable: {ex.Message}");
+                return false;
+            }
+        }
+
+        /// <summary>
+        /// Get the channel name from the last received message
+        /// </summary>
+        public string GetLastTopic()
+        {
+            lock (_lastTopicLock)
+            {
+                return _lastTopic;
+            }
+        }
+
+        /// <summary>
+        /// Register a callback for a channel pattern
+        /// </summary>
+        private void RegisterCallback(string channelPattern, Action<string, string> callback)
+        {
+            _callbacks.AddOrUpdate(
+                channelPattern,
+                new List<Action<string, string>> { callback },
+                (_, existing) =>
+                {
+                    existing.Add(callback);
+                    return existing;
+                });
+        }
+
+        /// <summary>
+        /// Unregister a callback for a channel pattern
+        /// </summary>
+        private void UnregisterCallback(string channelPattern)
+        {
+            _callbacks.TryRemove(channelPattern, out _);
+        }
+
+        /// <summary>
+        /// Notify subscribers of a new message
+        /// </summary>
+        private void NotifySubscribers(string channel, string messageId)
+        {
+            // Find all matching pattern callbacks
+            foreach (var (pattern, callbacks) in _callbacks)
+            {
+                if (MatchesPattern(channel, pattern))
+                {
+                    foreach (var callback in callbacks)
+                    {
+                        try
+                        {
+                            callback(channel, messageId);
+                        }
+                        catch (Exception ex)
+                        {
+                            G.LogWarn($"Error in subscription callback for {pattern}: {ex.Message}");
+                        }
+                    }
                 }
             }
         }
-    }
 
-    public async Task UnsubscribeAsync(string channel)
-    {
-        if (_disposed) throw new ObjectDisposedException(nameof(GhostBus));
-        if (string.IsNullOrEmpty(channel))
-            throw new ArgumentException("Channel cannot be empty", nameof(channel));
-
-        await _lock.WaitAsync();
-        try
+        /// <summary>
+        /// Check if a channel matches a pattern
+        /// </summary>
+        private bool MatchesPattern(string channel, string pattern)
         {
-            _subscriptions.TryRemove(channel, out _);
-            G.LogDebug("Unsubscribed from channel: {0}", channel);
-        }
-        finally
-        {
-            _lock.Release();
-        }
-    }
+            // Exact match
+            if (pattern == channel) return true;
 
-    public async Task<long> GetSubscriberCountAsync(string channel)
-    {
-        if (_disposed) throw new ObjectDisposedException(nameof(GhostBus));
-        if (string.IsNullOrEmpty(channel))
-            throw new ArgumentException("Channel cannot be empty", nameof(channel));
+            // No wildcards - no match
+            if (!pattern.Contains('*')) return false;
 
-        var count = 0L;
-
-        // Count local subscribers
-        if (_subscriptions.TryGetValue(channel, out var queues))
-        {
-            count += queues.Count;
+            // Convert pattern to regex
+            var regexPattern = "^" + Regex.Escape(pattern).Replace("\\*", ".*") + "$";
+            return Regex.IsMatch(channel, regexPattern);
         }
 
-        // Count remote subscribers (if using Redis)
-        try
+        /// <summary>
+        /// Clean up expired messages
+        /// </summary>
+        private async void CleanupCallback(object state)
         {
-            var remoteCount = await _cache.GetAsync<long>($"subscribers:{channel}");
-            count += remoteCount;
-        }
-        catch (Exception ex)
-        {
-            G.LogError("Failed to get remote subscriber count for channel: {0}", ex, channel);
-        }
+            if (_isDisposed) return;
 
-        return count;
-    }
-
-    public async Task<IEnumerable<string>> GetActiveChannelsAsync()
-    {
-        if (_disposed) throw new ObjectDisposedException(nameof(GhostBus));
-
-        var channels = new HashSet<string>(_subscriptions.Keys);
-
-        try
-        {
-            // Get remote channels (if using Redis)
-            var remoteChannels = await _cache.GetAsync<HashSet<string>>("active_channels");
-            if (remoteChannels != null)
+            try
             {
-                channels.UnionWith(remoteChannels);
+                await _lock.WaitAsync();
+                try
+                {
+                    // Remove subscriptions for completed tokens
+                    var completedSubscriptions = _subscriptions
+                        .Where(kv => kv.Value.IsCancellationRequested)
+                        .Select(kv => kv.Key)
+                        .ToList();
+
+                    foreach (var id in completedSubscriptions)
+                    {
+                        if (_subscriptions.TryRemove(id, out var cts))
+                        {
+                            cts.Dispose();
+                        }
+                    }
+
+                    // Note: We don't need to explicitly clean up messages as they have TTL set
+                }
+                finally
+                {
+                    _lock.Release();
+                }
+            }
+            catch (Exception ex)
+            {
+                G.LogWarn($"Error in cleanup task: {ex.Message}");
             }
         }
-        catch (Exception ex)
+
+        /// <summary>
+        /// Dispose resources
+        /// </summary>
+        public async ValueTask DisposeAsync()
         {
-            G.LogError("Failed to get remote active channels", ex);
-        }
+            if (_isDisposed) return;
 
-        return channels;
-    }
-
-    public async Task ClearChannelAsync(string channel)
-    {
-        if (_disposed) throw new ObjectDisposedException(nameof(GhostBus));
-        if (string.IsNullOrEmpty(channel))
-            throw new ArgumentException("Channel cannot be empty", nameof(channel));
-
-        try
-        {
-            // Clear messages
-            await _cache.DeleteAsync($"message:{channel}:*");
-
-            // Clear subscriber count
-            await _cache.DeleteAsync($"subscribers:{channel}");
-
-            // Clear local subscriptions
-            _subscriptions.TryRemove(channel, out _);
-
-            G.LogDebug("Cleared channel: {0}", channel);
-        }
-        catch (Exception ex)
-        {
-            G.LogError("Failed to clear channel: {0}", ex, channel);
-            throw new GhostException(
-                $"Failed to clear channel: {channel}",
-                ex,
-                ErrorCode.StorageOperationFailed);
-        }
-    }
-    public Task<bool> IsAvailableAsync()
-    {
-        return Task.FromResult(true);
-    }
-    public Task UnsubscribeAllAsync()
-    {
-        return _disposed ?
-                throw new ObjectDisposedException(nameof(GhostBus)) :
-                Task.WhenAll(_subscriptions.Keys.Select(UnsubscribeAsync));
-    }
-
-    public async ValueTask DisposeAsync()
-    {
-        if (_disposed) return;
-
-        await _lock.WaitAsync();
-        try
-        {
-            if (_disposed) return;
-            _disposed = true;
-
-            _subscriptions.Clear();
-
-            if (_cache is IAsyncDisposable disposable)
+            await _lock.WaitAsync();
+            try
             {
-                await disposable.DisposeAsync();
+                if (_isDisposed) return;
+                _isDisposed = true;
+
+                // Cancel all subscriptions
+                foreach (var (_, cts) in _subscriptions)
+                {
+                    cts.Cancel();
+                    cts.Dispose();
+                }
+
+                _subscriptions.Clear();
+                _callbacks.Clear();
+
+                // Clean up timer
+                await _cleanupTimer.DisposeAsync();
+
+                // Clean up lock
+                _lock.Dispose();
             }
-        }
-        finally
-        {
-            _lock.Release();
-            _lock.Dispose();
+            finally
+            {
+                if (!_isDisposed)
+                {
+                    _lock.Release();
+                }
+            }
         }
     }
 }

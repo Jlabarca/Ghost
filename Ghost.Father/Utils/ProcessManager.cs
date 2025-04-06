@@ -4,6 +4,7 @@ using Ghost.Core.Exceptions;
 using Ghost.Core.Monitoring;
 using Ghost.Core.Modules;
 using Ghost.Core.Storage;
+using Ghost.SDK;
 using System.Collections.Concurrent;
 using System.Text.Json;
 
@@ -82,6 +83,7 @@ public class ProcessManager : IProcessManager, IAsyncDisposable
             _lock.Release();
         }
     }
+
 
     private async Task SubscribeToSystemEventsAsync()
     {
@@ -503,17 +505,7 @@ public class ProcessConfig : ModuleConfig
 /// <summary>
 /// Process registration model
 /// </summary>
-public class ProcessRegistration
-{
-    public string Id { get; set; }
-    public string Type { get; set; }
-    public string Version { get; set; }
-    public string ExecutablePath { get; set; }
-    public string Arguments { get; set; }
-    public string WorkingDirectory { get; set; }
-    public Dictionary<string, string> Environment { get; set; }
-    public Dictionary<string, string> Configuration { get; set; }
-}
+
 
 /// <summary>
 /// System event model

@@ -27,9 +27,10 @@ public class InstallCommand : AsyncCommand<InstallCommand.Settings>
     public string? CustomInstallPath { get; set; }
   }
 
+  private Settings _settings;
   public override async Task<int> ExecuteAsync(CommandContext context, Settings settings)
   {
-    // Store settings for use in other methods
+    _settings = settings;
 
     var installPath = settings.CustomInstallPath ?? GetDefaultInstallPath();
 
@@ -38,6 +39,8 @@ public class InstallCommand : AsyncCommand<InstallCommand.Settings>
         {
           try
           {
+            await TerminateGhostProcessesAsync();
+
             if (Directory.Exists(installPath) && !settings.Force)
             {
               AnsiConsole.MarkupLine("[yellow]Ghost is already installed at:[/] " + installPath);
@@ -829,6 +832,133 @@ namespace Ghost.SDK
       return false;
     }
   }
+
+private async Task TerminateGhostProcessesAsync()
+{
+    try
+    {
+        AnsiConsole.MarkupLine("[grey]Checking for running Ghost processes...[/]");
+        var ghostProcesses = Process.GetProcesses()
+            .Where(p => {
+                try
+                {
+                    return p.ProcessName.ToLowerInvariant().Contains("ghost") ||
+                           (p.MainModule?.FileName?.Contains("\\Ghost\\", StringComparison.OrdinalIgnoreCase) ?? false);
+                }
+                catch
+                {
+                    // Process access might be denied, skip it
+                    return false;
+                }
+            })
+            .ToList();
+
+        if (ghostProcesses.Count > 0)
+        {
+            AnsiConsole.MarkupLine($"[yellow]Found {ghostProcesses.Count} running Ghost processes that need to be terminated:[/]");
+
+            foreach (var process in ghostProcesses)
+            {
+                try
+                {
+                    string processDetails = $"{process.ProcessName} (PID: {process.Id})";
+
+                    try
+                    {
+                        if (process.MainModule != null)
+                        {
+                            processDetails += $" - {process.MainModule.FileName}";
+                        }
+                    }
+                    catch
+                    {
+                        // Ignore if we can't get the module info
+                    }
+
+                    AnsiConsole.MarkupLine($"  [grey]· {processDetails}[/]");
+                }
+                catch
+                {
+                    AnsiConsole.MarkupLine($"  [grey]· Unknown process (PID: {process.Id})[/]");
+                }
+            }
+
+            if (!_settings.Force)
+            {
+                var confirmKill = AnsiConsole.Confirm("[yellow]Would you like to terminate these processes?[/]", true);
+                if (!confirmKill)
+                {
+                    throw new GhostException(
+                        "Installation cannot proceed while Ghost processes are running. Please terminate them manually or use --force.",
+                        ErrorCode.InstallationError);
+                }
+            }
+
+            foreach (var process in ghostProcesses)
+            {
+                try
+                {
+                    AnsiConsole.MarkupLine($"[grey]Terminating process: {process.ProcessName} (PID: {process.Id})[/]");
+                    process.Kill(true); // true = kill entire process tree
+                    await Task.Delay(500); // Brief delay to ensure process is terminated
+                }
+                catch (Exception ex)
+                {
+                    AnsiConsole.MarkupLine($"[yellow]Warning:[/] Could not terminate process {process.Id}: {ex.Message}");
+                }
+            }
+
+            // Give processes time to properly shut down
+            AnsiConsole.MarkupLine("[grey]Waiting for processes to terminate...[/]");
+            await Task.Delay(2000);
+
+            // Double-check if all processes were terminated
+            var remainingProcesses = Process.GetProcesses()
+                .Where(p => {
+                    try
+                    {
+                        return p.ProcessName.ToLowerInvariant().Contains("ghost") ||
+                               (p.MainModule?.FileName?.Contains("\\Ghost\\", StringComparison.OrdinalIgnoreCase) ?? false);
+                    }
+                    catch
+                    {
+                        return false;
+                    }
+                })
+                .ToList();
+
+            if (remainingProcesses.Count > 0 && _settings.Force)
+            {
+                AnsiConsole.MarkupLine("[yellow]Warning:[/] Some Ghost processes could not be terminated. Installation may fail.");
+            }
+            else if (remainingProcesses.Count > 0)
+            {
+                throw new GhostException(
+                    "Could not terminate all Ghost processes. Please terminate them manually or use --force.",
+                    ErrorCode.InstallationError);
+            }
+            else
+            {
+                AnsiConsole.MarkupLine("[green]All Ghost processes terminated successfully.[/]");
+            }
+        }
+        else
+        {
+            AnsiConsole.MarkupLine("[grey]No running Ghost processes found.[/]");
+        }
+    }
+    catch (Exception ex) when (!(ex is GhostException))
+    {
+        AnsiConsole.MarkupLine($"[yellow]Warning:[/] Error checking for Ghost processes: {ex.Message}");
+        if (!_settings.Force)
+        {
+            throw new GhostException(
+                "Could not check for running Ghost processes. Please ensure no Ghost processes are running or use --force.",
+                ex,
+                ErrorCode.InstallationError);
+        }
+    }
+}
 
   private string GetDefaultInstallPath()
   {

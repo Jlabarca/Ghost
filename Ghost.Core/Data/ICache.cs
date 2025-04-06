@@ -8,4 +8,5 @@ public interface ICache : IStorageProvider
   Task<bool> ExistsAsync(string key, CancellationToken ct = default(CancellationToken));
   Task<bool> ExpireAsync(string key, TimeSpan expiry, CancellationToken ct = default(CancellationToken));
   Task ClearAsync(CancellationToken ct = default(CancellationToken));
+  Task<List<T>> GetAllAsync<T>(T channelsActive);
 }

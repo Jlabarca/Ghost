@@ -4,6 +4,7 @@ using Spectre.Console;
 using Spectre.Console.Cli;
 using System.ComponentModel;
 using System.Diagnostics;
+using System.Text.Json;
 
 namespace Ghost.Father.CLI.Commands;
 
@@ -99,6 +100,7 @@ public class MonitorCommand : AsyncCommand<MonitorCommand.Settings>
                 .Overflow(VerticalOverflow.Ellipsis)
                 .Cropping(VerticalOverflowCropping.Bottom)
                 .StartAsync(async ctx => {
+                    await FetchInitialProcessList(ctx);
                     // Start system status update task
                     Task systemTask = MonitorSystemStatusAsync(ctx, settings);
 
@@ -145,30 +147,6 @@ public class MonitorCommand : AsyncCommand<MonitorCommand.Settings>
         }
     }
 
-    private async Task MonitorProcessMetricsAsync(LiveDisplayContext ctx, Settings settings)
-    {
-        try
-        {
-            var filter = settings.ProcessId != null ? $"ghost:metrics:{settings.ProcessId}" : "ghost:metrics:#";
-            await foreach (var metrics in _bus.SubscribeAsync<ProcessMetrics>(filter))
-            {
-                if (!_watching) break;
-
-                // Update process state
-                UpdateProcessState(metrics);
-
-                // Update tables
-                UpdateProcessTables();
-                ctx.Refresh();
-            }
-        }
-        catch (Exception ex)
-        {
-            G.LogError("Error monitoring processes", ex);
-            if (!settings.NoClear) AnsiConsole.Clear();
-            AnsiConsole.MarkupLine($"[red]Error monitoring processes:[/] {ex.Message}");
-        }
-    }
 
     private async Task MonitorStalledProcessesAsync(LiveDisplayContext ctx, Settings settings)
     {
@@ -389,6 +367,33 @@ public class MonitorCommand : AsyncCommand<MonitorCommand.Settings>
         return $"{dblBytes:0.##}{suffix[i]}";
     }
 
+    private async Task FetchInitialProcessListAsync(LiveDisplayContext ctx, Settings settings)
+    {
+        try {
+            // Query processes directly from the daemon
+            var command = new SystemCommand {
+                    CommandId = Guid.NewGuid().ToString(),
+                    CommandType = "status",
+                    Parameters = new Dictionary<string, string>()
+            };
+
+            await _bus.PublishAsync("ghost:commands", command);
+
+            // Wait for response
+            var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+            await foreach (var response in _bus.SubscribeAsync<CommandResponse>("ghost:responses", cts.Token)) {
+                if (response.CommandId == command.CommandId && response.Data != null) {
+                    // Process the response data and update tables
+                    //UpdateProcessesFromStatusResponse(response.Data);
+                    ctx.Refresh();
+                    break;
+                }
+            }
+        } catch (Exception ex) {
+            G.LogError(ex, "Failed to fetch initial process list");
+        }
+    }
+
     private async Task SendControlCommandAsync(string processId, string command)
     {
         try
@@ -415,4 +420,242 @@ public class MonitorCommand : AsyncCommand<MonitorCommand.Settings>
             G.LogError(ex, $"Failed to send {command} command to process {processId}");
         }
     }
+
+    private async Task MonitorProcessMetricsAsync(LiveDisplayContext ctx, Settings settings)
+    {
+        try
+        {
+            // Fixed topic pattern using * instead of # for wildcard matching
+            var filter = settings.ProcessId != null ?
+                $"ghost:metrics:{settings.ProcessId}" :
+                "ghost:metrics:*";
+
+            await foreach (var metrics in _bus.SubscribeAsync<dynamic>(filter))
+            {
+                if (!_watching) break;
+
+                try
+                {
+                    // Extract processId from topic pattern
+                    var topic = _bus.GetLastTopic();
+                    var processId = topic.Substring("ghost:metrics:".Length);
+
+                    // Update process state with metrics
+                    if (!_processes.TryGetValue(processId, out var process))
+                    {
+                        // New process discovered through metrics
+                        process = new ProcessState
+                        {
+                            Id = processId,
+                            Name = GetDisplayName(processId),
+                            IsRunning = true,
+                            StartTime = DateTime.UtcNow,
+                            LastSeen = DateTime.UtcNow
+                        };
+
+                        // Determine if service based on metadata
+                        // Check for AppType tag
+                        if (metrics.GetType().GetProperty("Tags") != null)
+                        {
+                            var tags = metrics.Tags as Dictionary<string, string>;
+                            if (tags != null && tags.TryGetValue("AppType", out var appType))
+                            {
+                                process.IsService = string.Equals(appType, "service", StringComparison.OrdinalIgnoreCase);
+                            }
+                        }
+
+                        _processes[processId] = process;
+                    }
+
+                    // Update metrics
+                    process.LastMetrics = metrics;
+                    process.LastSeen = DateTime.UtcNow;
+
+                    // Update display
+                    UpdateProcessTables();
+                    ctx.Refresh();
+                }
+                catch (Exception ex)
+                {
+                    G.LogError(ex, "Error processing metrics");
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            G.LogError(ex, "Error monitoring process metrics");
+        }
+    }
+
+    // Updated method to fetch initial process list
+    private async Task FetchInitialProcessList(LiveDisplayContext ctx)
+    {
+        try
+        {
+            // Query GhostFather for all processes
+            var command = new SystemCommand
+            {
+                CommandId = Guid.NewGuid().ToString(),
+                CommandType = "status",
+                Parameters = new Dictionary<string, string>()
+            };
+
+            await _bus.PublishAsync("ghost:commands", command);
+
+            // Wait for response with timeout
+            var responseReceived = new TaskCompletionSource<bool>();
+            var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+
+            try
+            {
+                await foreach (var response in _bus.SubscribeAsync<CommandResponse>("ghost:responses", cts.Token))
+                {
+                    if (response.CommandId == command.CommandId && response.Success)
+                    {
+                        if (response.Data != null)
+                        {
+                            try
+                            {
+                                // Process the data
+                                UpdateProcessesFromStatusResponse(response.Data);
+
+                                // Update tables
+                                UpdateProcessTables();
+                                ctx.Refresh();
+                            }
+                            catch (Exception ex)
+                            {
+                                G.LogError(ex, "Error processing status response data");
+                            }
+                        }
+
+                        responseReceived.TrySetResult(true);
+                        break;
+                    }
+                }
+            }
+            catch (OperationCanceledException)
+            {
+                // Timeout - continue without initial data
+                G.LogWarn("Timeout waiting for process list");
+                responseReceived.TrySetResult(false);
+            }
+
+            await responseReceived.Task;
+        }
+        catch (Exception ex)
+        {
+            G.LogError(ex, "Error fetching initial process list");
+        }
+    }
+
+    // Helper method to update process data from status response
+    private void UpdateProcessesFromStatusResponse(object data)
+    {
+        if (data == null) return;
+
+        try
+        {
+            // Convert data to dictionary
+            var dataDict = JsonSerializer.Deserialize<Dictionary<string, object>>(
+                JsonSerializer.Serialize(data));
+
+            if (dataDict != null && dataDict.TryGetValue("Processes", out var processesObj))
+            {
+                // Parse processes array
+                var processes = JsonSerializer.Deserialize<List<Dictionary<string, object>>>(
+                    JsonSerializer.Serialize(processesObj));
+
+                if (processes != null)
+                {
+                    foreach (var processDict in processes)
+                    {
+                        if (processDict.TryGetValue("id", out var idObj) &&
+                            idObj != null &&
+                            processDict.TryGetValue("status", out var statusObj) &&
+                            statusObj != null)
+                        {
+                            var id = idObj.ToString();
+                            var status = statusObj.ToString();
+
+                            // Get or create process state
+                            if (!_processes.TryGetValue(id, out var process))
+                            {
+                                process = new ProcessState
+                                {
+                                    Id = id,
+                                    Name = processDict.TryGetValue("name", out var nameObj) && nameObj != null ?
+                                        nameObj.ToString() : GetDisplayName(id)
+                                };
+
+                                // Set start time if available
+                                if (processDict.TryGetValue("StartTime", out var startTimeObj) &&
+                                    startTimeObj != null &&
+                                    DateTime.TryParse(startTimeObj.ToString(), out var startTime))
+                                {
+                                    process.StartTime = startTime;
+                                }
+                                else
+                                {
+                                    process.StartTime = DateTime.UtcNow;
+                                }
+
+                                _processes[id] = process;
+                            }
+
+                            // Update status
+                            process.IsRunning = status.Equals("Running", StringComparison.OrdinalIgnoreCase);
+
+                            // Update end time if stopped
+                            if (!process.IsRunning && !process.EndTime.HasValue &&
+                                processDict.TryGetValue("LastUpdate", out var lastUpdateObj) &&
+                                lastUpdateObj != null &&
+                                DateTime.TryParse(lastUpdateObj.ToString(), out var lastUpdate))
+                            {
+                                process.EndTime = lastUpdate;
+                            }
+
+                            // Determine if service
+                            if (processDict.TryGetValue("type", out var typeObj) && typeObj != null)
+                            {
+                                var type = typeObj.ToString();
+                                process.IsService = type.Equals("service", StringComparison.OrdinalIgnoreCase) ||
+                                                   type.Equals("daemon", StringComparison.OrdinalIgnoreCase);
+                            }
+
+                            // Set last seen time
+                            process.LastSeen = DateTime.UtcNow;
+
+                            // Update metrics if available
+                            if (processDict.TryGetValue("CpuPercentage", out var cpuObj) &&
+                                processDict.TryGetValue("MemoryBytes", out var memObj))
+                            {
+                                // Create basic metrics object
+                                var metrics = new Dictionary<string, object>();
+
+                                if (cpuObj != null)
+                                {
+                                    metrics["CpuPercentage"] = Convert.ToDouble(cpuObj);
+                                }
+
+                                if (memObj != null)
+                                {
+                                    metrics["MemoryBytes"] = Convert.ToInt64(memObj);
+                                }
+
+                                // Set as dynamic object
+                                process.LastMetrics = JsonSerializer.Deserialize<dynamic>(
+                                    JsonSerializer.Serialize(metrics));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            G.LogError(ex, "Error parsing status response");
+        }
+    }
+
 }

@@ -1,6 +1,8 @@
+using System;
+using System.Collections.Generic;
 using System.Text.Json.Serialization;
 
-namespace Ghost.Father.Models
+namespace Ghost.SDK
 {
     /// <summary>
     /// Registration information for a process to be managed by GhostFather

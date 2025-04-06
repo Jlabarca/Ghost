@@ -117,4 +117,9 @@ public static partial class G
         EnsureInitialized();
         _logger!.SetCache(cache);
     }
+    public static IGhostLogger GetLogger()
+    {
+        EnsureInitialized();
+        return _logger!;
+    }
 }

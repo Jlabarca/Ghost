@@ -1,3 +1,4 @@
+using Ghost.Core.Data;
 using Ghost.Core.Storage;
 using Microsoft.Extensions.DependencyInjection;
 using Spectre.Console.Cli;
@@ -26,22 +27,185 @@ public class CommandValidator
     public ValidationResult ValidateCommands()
     {
         var result = new ValidationResult(_bus);
-
         foreach (var (commandName, commandType) in _registeredCommands)
         {
             try
             {
                 ValidateCommand(commandType, commandName, result);
+
+                // Special validations for specific commands
+                if (commandName == "run")
+                {
+                    ValidateRunCommand(commandType, result);
+                }
+                else if (commandName == "monitor")
+                {
+                    ValidateMonitorCommand(commandType, result);
+                }
+                else if (commandName == "register")
+                {
+                    ValidateRegisterCommand(commandType, result);
+                }
             }
             catch (Exception ex)
             {
                 result.AddError(commandType, commandName, $"Unexpected error validating command: {ex.Message}");
             }
         }
-
         return result;
     }
 
+    private void ValidateRegisterCommand(Type commandType, ValidationResult result)
+    {
+        // Check if RegisterCommand has the required dependencies
+        var requiredTypes = new[]
+        {
+            typeof(IGhostBus),
+            typeof(IStorageProvider)
+        };
+
+        foreach (var requiredType in requiredTypes)
+        {
+            if (!HasDependency(commandType, requiredType))
+            {
+                result.AddMissingDependency(
+                    commandType,
+                    "register",
+                    requiredType,
+                    $"RegisterCommand requires {requiredType.Name} dependency.");
+            }
+        }
+
+        // Check settings properties
+        var settingsType = GetSettingsType(commandType);
+        if (settingsType != null)
+        {
+            var requiredSettings = new[]
+            {
+                "Name", "Args", "Watch", "Environment", "Background"
+            };
+
+            foreach (var setting in requiredSettings)
+            {
+                if (!HasProperty(settingsType, setting))
+                {
+                    result.AddWarning(
+                        commandType,
+                        "register",
+                        $"RegisterCommand.Settings is missing property: {setting}");
+                }
+            }
+        }
+    }
+
+    // Add specialized validator for RunCommand
+    private void ValidateRunCommand(Type commandType, ValidationResult result)
+    {
+        // Check if RunCommand has the required dependencies
+        var requiredTypes = new[]
+        {
+            typeof(IGhostBus)
+        };
+
+        foreach (var requiredType in requiredTypes)
+        {
+            if (!HasDependency(commandType, requiredType))
+            {
+                result.AddMissingDependency(
+                    commandType,
+                    "run",
+                    requiredType,
+                    $"RunCommand requires {requiredType.Name} dependency.");
+            }
+        }
+
+        // Check settings properties
+        var settingsType = GetSettingsType(commandType);
+        if (settingsType != null)
+        {
+            var requiredSettings = new[]
+            {
+                "Name", "Args", "Watch", "Environment", "Background"
+            };
+
+            foreach (var setting in requiredSettings)
+            {
+                if (!HasProperty(settingsType, setting))
+                {
+                    result.AddWarning(
+                        commandType,
+                        "run",
+                        $"RunCommand.Settings is missing property: {setting}");
+                }
+            }
+        }
+    }
+
+    // Add specialized validator for MonitorCommand
+    private void ValidateMonitorCommand(Type commandType, ValidationResult result)
+    {
+        // Check if MonitorCommand has the required dependencies
+        var requiredTypes = new[]
+        {
+            typeof(IGhostBus)
+        };
+
+        foreach (var requiredType in requiredTypes)
+        {
+            if (!HasDependency(commandType, requiredType))
+            {
+                result.AddMissingDependency(
+                    commandType,
+                    "monitor",
+                    requiredType,
+                    $"MonitorCommand requires {requiredType.Name} dependency.");
+            }
+        }
+
+        // Check for necessary handling methods
+        var requiredMethods = new[]
+        {
+            "FetchInitialProcessList",
+            "MonitorProcessMetricsAsync",
+            "MonitorHealthStatusAsync",
+            "UpdateProcessTables"
+        };
+
+        foreach (var method in requiredMethods)
+        {
+            if (!HasMethod(commandType, method))
+            {
+                result.AddWarning(
+                    commandType,
+                    "monitor",
+                    $"MonitorCommand is missing method: {method}");
+            }
+        }
+    }
+
+    // Helper methods
+    private bool HasDependency(Type type, Type dependencyType)
+    {
+        return type.GetConstructors()
+            .SelectMany(c => c.GetParameters())
+            .Any(p => p.ParameterType == dependencyType || dependencyType.IsAssignableFrom(p.ParameterType));
+    }
+
+    private Type GetSettingsType(Type commandType)
+    {
+        return commandType.BaseType?.GenericTypeArguments.FirstOrDefault();
+    }
+
+    private bool HasProperty(Type type, string propertyName)
+    {
+        return type.GetProperty(propertyName) != null;
+    }
+
+    private bool HasMethod(Type type, string methodName)
+    {
+        return type.GetMethods(BindingFlags.NonPublic | BindingFlags.Public | BindingFlags.Instance)
+            .Any(m => m.Name == methodName);
+    }
     private void ValidateCommand(Type commandType, string commandName, ValidationResult result)
     {
         // Check service registration

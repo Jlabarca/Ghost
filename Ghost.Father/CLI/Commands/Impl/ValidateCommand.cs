@@ -1,6 +1,7 @@
 using Ghost.Core.Storage;
 using Ghost.Core.Monitoring;
 using Ghost.Core.Data;
+using Ghost.SDK;
 using Microsoft.Extensions.DependencyInjection;
 using Spectre.Console;
 using Spectre.Console.Cli;
@@ -936,7 +937,7 @@ public class ValidateCommand : AsyncCommand<ValidateCommand.Settings>
     try
     {
       // Basic validation of GhostApp class
-      var ghostAppType = typeof(Ghost.SDK.GhostApp);
+      var ghostAppType = typeof(GhostApp);
       var runAsyncMethod = ghostAppType.GetMethod("RunAsync", BindingFlags.Public | BindingFlags.Instance);
 
       if (runAsyncMethod != null)
@@ -1088,7 +1089,7 @@ public class ValidateCommand : AsyncCommand<ValidateCommand.Settings>
     try
     {
       // Test health monitoring
-      var healthMonitor = new HealthMonitor(_bus,checkInterval: TimeSpan.FromSeconds(1));
+      var healthMonitor = new HealthMonitor(_bus, checkInterval: TimeSpan.FromSeconds(1));
       var ct = CancellationToken.None;
       // Test health check
       try

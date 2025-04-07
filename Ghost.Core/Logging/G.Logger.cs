@@ -65,7 +65,8 @@ public static partial class G
     {
         if (_logger == null)
         {
-            throw new InvalidOperationException("Ghost logger not initialized. Call Ghost.Initialize() first.");
+            Console.WriteLine("Ghost logger not initialized. Call Ghost.Initialize() first.");
+            //throw new InvalidOperationException("Ghost logger not initialized. Call Ghost.Initialize() first.");
         }
     }
 

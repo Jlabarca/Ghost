@@ -4,14 +4,12 @@ public abstract class GhostModule<TConfig> : IGhostModule
     where TConfig : ModuleConfig
 {
   protected readonly TConfig Config;
-  protected readonly IGhostCore Core;
 
   public string Name => GetType().Name;
   public bool IsEnabled => Config.Enabled;
 
-  protected GhostModule(IGhostCore core, TConfig config)
+  protected GhostModule(TConfig config)
   {
-    Core = core;
     Config = config;
   }
 

@@ -1,5 +1,4 @@
 using Ghost.Core.Config;
-using Ghost.Core.Modules;
 using Ghost.Father.CLI;
 using Ghost.Father.Daemon;
 
@@ -99,7 +98,6 @@ public static partial class GhostFather
                 HealthCheckInterval = TimeSpan.FromSeconds(30),
                 MetricsInterval = TimeSpan.FromSeconds(5)
             },
-            Modules = new Dictionary<string, ModuleConfig>()
         };
 
         for (int i = 0; i < args.Length; i++)

@@ -7,7 +7,7 @@ using System.Runtime.CompilerServices;
 
 namespace Ghost.Core.Logging;
 
-public class SpectreGhostLogger : ILogger
+public class SpectreGhostLogger : IGhostLogger
 {
     private readonly string _processId;
     private readonly GhostLoggerConfiguration _config;

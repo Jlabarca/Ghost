@@ -17,16 +17,13 @@ public class ModuleRegistry
 
   public async Task<IGhostModule> CreateModuleAsync(
       string name,
-      IGhostCore core,
       ModuleConfig config)
   {
     if (!_moduleTypes.TryGetValue(name, out var moduleType))
       throw new KeyNotFoundException($"Module {name} not registered");
 
     var module = (IGhostModule)Activator.CreateInstance(
-        moduleType,
-        new object[] { core, config }
-    );
+        moduleType, config);
 
     await module.InitializeAsync();
     _instances[name] = module;

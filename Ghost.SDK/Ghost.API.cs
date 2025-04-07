@@ -1,66 +1,64 @@
 using Ghost.Core.Config;
-namespace Ghost.SDK
+using Ghost.Core.Data;
+using Ghost.Core.Monitoring;
+using Ghost.Core.Storage;
+
+namespace Ghost.SDK;
+
+public static class Petter
 {
-    /// <summary>
-    /// Static facade for accessing Ghost services and utilities
-    /// </summary>
-    public static class Ghost
-    {
-        private static readonly GhostSessionManager _sessionManager = new GhostSessionManager();
+  // Direct access to subsystems
+  public static GhostConfig Config => GhostProcess.Instance.Config;
+  public static IGhostData Data => GhostProcess.Instance.Data;
+  public static IGhostBus Bus => GhostProcess.Instance.Bus;
+  public static MetricsCollector Metrics => GhostProcess.Instance.Metrics;
 
-        /// <summary>
-        /// Access to metrics collection and reporting
-        /// </summary>
-        public static MetricsManager Metrics => _sessionManager.GetMetrics();
+  // Current app context
+  public static GhostApp Current => GhostProcess.Instance.CurrentApp;
 
-        /// <summary>
-        /// Access to configuration
-        /// </summary>
-        public static ConfigManager Config => _sessionManager.GetConfig();
+  // Initialization
+  public static void Init(GhostApp app)
+  {
+    GhostProcess.Instance.Initialize(app);
+  }
 
-        /// <summary>
-        /// Access to data storage
-        /// </summary>
-        public static DataManager Data => _sessionManager.GetData();
+  public static void Init(GhostConfig config)
+  {
+    GhostProcess.Instance.Initialize(config);
+  }
 
-        /// <summary>
-        /// Access to messaging bus
-        /// </summary>
-        public static BusManager Bus => _sessionManager.GetBus();
+  // Metrics
+  public static Task TrackMetricAsync(string name, double value, Dictionary<string, string> tags = null)
+    => GhostProcess.Instance.TrackMetricAsync(name, value, tags);
 
-        /// <summary>
-        /// Initialize Ghost services for an application
-        /// </summary>
-        /// <param name="app">The GhostApp instance to initialize</param>
-        public static void Init(GhostApp app)
-        {
-            _sessionManager.RegisterApp(app);
-        }
+  public static Task TrackEventAsync(string name, Dictionary<string, string> properties = null)
+    => GhostProcess.Instance.TrackEventAsync(name, properties);
 
-        /// <summary>
-        /// Initialize Ghost services with explicit configuration
-        /// </summary>
-        /// <param name="config">Configuration override</param>
-        public static void Init(GhostConfig config)
-        {
-            _sessionManager.Initialize(config);
-        }
+  // Data
+  public static Task<int> ExecuteAsync(string sql, object param = null)
+    => GhostProcess.Instance.ExecuteAsync(sql, param);
 
-        /// <summary>
-        /// Shutdown Ghost services
-        /// </summary>
-        /// <returns>Task representing the shutdown operation</returns>
-        public static async Task ShutdownAsync()
-        {
-            await _sessionManager.ShutdownAsync();
-        }
+  public static Task<IEnumerable<T>> QueryAsync<T>(string sql, object param = null)
+    => GhostProcess.Instance.QueryAsync<T>(sql, param);
 
-        /// <summary>
-        /// Get the current app instance
-        /// </summary>
-        public static GhostApp Current => _sessionManager.CurrentApp;
+  public static string GetSetting(string name, string defaultValue = null)
+    => GhostProcess.Instance.GetSetting(name, defaultValue);
 
-        // Logging methods can stay the same or be moved to a dedicated Logger property
-        // G.LogInfo, G.LogError, etc.
-    }
+  // Bus
+  public static Task PublishAsync<T>(string channel, T message, TimeSpan? expiry = null)
+    => GhostProcess.Instance.PublishAsync(channel, message, expiry);
+
+  // Shutdown
+  public static Task ShutdownAsync() => GhostProcess.Instance.ShutdownAsync();
+
+  // Logging methods
+  public static void LogInfo(string message) => Log("INFO", message);
+  public static void LogError(Exception ex, string message) => Log("ERROR", $"{message}: {ex.Message}");
+  public static void LogWarn(string message) => Log("WARN", message);
+  public static void LogDebug(string message) => Log("DEBUG", message);
+
+  private static void Log(string level, string message)
+  {
+    // Implement logging
+  }
 }

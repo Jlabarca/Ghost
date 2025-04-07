@@ -30,14 +30,14 @@ public class ProcessManager : IProcessManager, IAsyncDisposable
     private readonly int _maxStartAttempts = 3;
 
     public ProcessManager(
-        IGhostBus bus,
-        IGhostData data,
         GhostConfig config,
         HealthMonitor healthMonitor,
+        IGhostBus bus,
+        IGhostData data,
         StateManager stateManager)
     {
-        _bus = bus ?? throw new ArgumentNullException(nameof(bus));
-        _data = data ?? throw new ArgumentNullException(nameof(data));
+        _bus = bus;
+        _data = data;
         _config = config ?? throw new ArgumentNullException(nameof(config));
         _healthMonitor = healthMonitor ?? throw new ArgumentNullException(nameof(healthMonitor));
         _stateManager = stateManager ?? throw new ArgumentNullException(nameof(stateManager));
@@ -51,6 +51,7 @@ public class ProcessManager : IProcessManager, IAsyncDisposable
         try
         {
             // Initialize schema
+            //await _data.InitializeSchemaAsync();
 
 
             // Initialize state manager
@@ -484,6 +485,45 @@ public class ProcessManager : IProcessManager, IAsyncDisposable
         catch (Exception ex)
         {
             G.LogError(ex, "Error during maintenance tick");
+        }
+        finally
+        {
+            _lock.Release();
+        }
+    }
+    public async Task<List<ProcessInfo>> GetAllProcessesAsync()
+    {
+        await _lock.WaitAsync();
+        try
+        {
+            return _processes.Values.ToList();
+        }
+        finally
+        {
+            _lock.Release();
+        }
+    }
+    public async Task<object> RunCommandAsync(string command, string args, string workingDirectory, bool waitForExit)
+    {
+        await _lock.WaitAsync();
+        try
+        {
+            var process = new ProcessInfo(
+                id: Guid.NewGuid().ToString(),
+                metadata: new ProcessMetadata("Command", "Command", "1.0.0", new Dictionary<string, string>(), new Dictionary<string, string>()),
+                executablePath: command,
+                arguments: args,
+                workingDirectory: workingDirectory,
+                environment: new Dictionary<string, string>()
+            );
+
+            await process.StartAsync();
+            if (waitForExit)
+            {
+                await process.WaitForExitAsync();
+            }
+
+            return process;
         }
         finally
         {

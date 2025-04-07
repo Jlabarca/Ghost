@@ -4,6 +4,7 @@ using Ghost.Core.Config;
 using Ghost.Core.Storage;
 using Ghost.Core.Logging;
 using Ghost.Core.Data;
+using Ghost.Core.Modules;
 using Ghost.Templates;
 using Ghost.Father.CLI.Commands;
 using Ghost.SDK;
@@ -19,7 +20,7 @@ namespace Ghost.Father.CLI
     /// <summary>
     /// Main CLI application for Ghost framework
     /// </summary>
-    public class GhostFatherCLI : GhostServiceApp
+    public class GhostFatherCLI : GhostApp
     {
         private readonly CommandApp _app;
         private readonly TypeRegistrar _registrar;
@@ -31,6 +32,7 @@ namespace Ghost.Father.CLI
         /// <param name="config">Optional configuration override</param>
         public GhostFatherCLI(GhostConfig config = null)
         {
+
             _config = config ?? LoadDefaultConfig();
 
             // Initialize services
@@ -66,14 +68,14 @@ namespace Ghost.Father.CLI
             // Register all commands from the registry
             CommandRegistry.RegisterServices(Services);
 
-            if (G.IsDebug)
-            {
-                G.LogDebug("Registered services:");
-                foreach (var service in Services)
-                {
-                    G.LogDebug($" {service.ServiceType.Name} -> {service.ImplementationType?.Name ?? "null"}");
-                }
-            }
+            // if (G.IsDebug)
+            // {
+            //     G.LogDebug("Registered services:");
+            //     foreach (var service in Services)
+            //     {
+            //         G.LogDebug($" {service.ServiceType.Name} -> {service.ImplementationType?.Name ?? "null"}");
+            //     }
+            // }
         }
 
         /// <summary>
@@ -95,23 +97,13 @@ namespace Ghost.Father.CLI
             Services.AddSingleton<IGhostBus>(bus);
 
             // Configure database
-            var dbPath = Path.Combine(
-                _config.Core.DataPath ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Ghost"),
-                "ghost.db");
-            var database = new SQLiteDatabase(dbPath);
-            Services.AddSingleton<IGhostData>(database);
+            // var dbPath = Path.Combine(
+            //     _config.Core.DataPath ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Ghost"),
+            //     "ghost.db");
+            // var database = new SQLiteDatabase(dbPath);
 
-            // Configure logger
-            var loggerConfig = new GhostLoggerConfiguration
-            {
-                LogsPath = _config.Core.LogsPath ?? "logs",
-                OutputsPath = Path.Combine(_config.Core.LogsPath ?? "logs", "outputs"),
-                LogLevel = Microsoft.Extensions.Logging.LogLevel.Information
-            };
+           // Services.AddSingleton<IGhostData>(database);
 
-            var logger = new SpectreGhostLogger(cache, loggerConfig);
-            Services.AddSingleton<IGhostLogger>(logger);
-            G.Initialize(logger);
         }
 
         /// <summary>
@@ -133,7 +125,7 @@ namespace Ghost.Father.CLI
                 config.PropagateExceptions();
 
                 // Set custom style for console output
-                config.UseAnsi();
+                //config.UseAnsi();
             });
         }
 
@@ -184,7 +176,7 @@ namespace Ghost.Father.CLI
                     HealthCheckInterval = TimeSpan.FromSeconds(30),
                     MetricsInterval = TimeSpan.FromSeconds(5)
                 },
-                Modules = new Dictionary<string, object>()
+                Modules = new Dictionary<string, ModuleConfig>()
             };
         }
 
@@ -230,14 +222,14 @@ namespace Ghost.Father.CLI
             Directory.CreateDirectory(templatePathNext);
 
             // Initialize templates
-            try
-            {
-                Ghost.Templates.TemplateSetup.EnsureTemplatesExist(exeDir);
-            }
-            catch (Exception ex)
-            {
-                G.LogError(ex, "Failed to initialize templates");
-            }
+            // try
+            // {
+            //     Ghost.Templates.TemplateSetup.EnsureTemplatesExist(exeDir);
+            // }
+            // catch (Exception ex)
+            // {
+            //     G.LogError(ex, "Failed to initialize templates");
+            // }
 
             return templatePathNext;
         }
@@ -279,16 +271,21 @@ namespace Ghost.Father.CLI
         /// <summary>
         /// Clean up resources
         /// </summary>
-        public override async ValueTask DisposeAsync()
+        public async ValueTask DisposeAsync()
         {
             try
             {
                 G.LogDebug("Disposing GhostFatherCLI");
 
-                // Dispose all services
-                if (Services is ServiceProvider sp)
+                switch (Services)
                 {
-                    await sp.DisposeAsync();
+                    // Dispose all services
+                    case IDisposable d:
+                        d.Dispose();
+                        break;
+                    case IAsyncDisposable sp:
+                        await sp.DisposeAsync();
+                        break;
                 }
 
                 await base.DisposeAsync();

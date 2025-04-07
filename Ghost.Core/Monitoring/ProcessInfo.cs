@@ -118,8 +118,7 @@ public class ProcessInfo : IAsyncDisposable
     public event EventHandler<ProcessOutputEventArgs>? ErrorReceived;
     public event EventHandler<ProcessStatusEventArgs>? StatusChanged;
 
-    // Rest of the implementation remains the same...
-    // Copy over all the existing methods from the original ProcessInfo.cs
+
 
     public async Task StartAsync()
     {
@@ -327,6 +326,11 @@ public class ProcessInfo : IAsyncDisposable
         {
             _lock.Release();
         }
+    }
+    public async Task WaitForExitAsync()
+    {
+        if (_process == null) throw new InvalidOperationException("Process not started.");
+        await Task.Run(() => _process.WaitForExit());
     }
 }
 

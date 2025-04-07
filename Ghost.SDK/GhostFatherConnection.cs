@@ -1,16 +1,11 @@
 using Ghost.Core.Data;
-using System;
-using System.Collections.Generic;
 using System.Diagnostics;
-using System.IO;
 using System.Text.Json;
-using System.Threading;
-using System.Threading.Tasks;
 using Ghost.Core.Monitoring;
 using Ghost.Core.Storage;
 using Ghost.Father.Ghost.Core.Monitoring;
 
-namespace Ghost.Father;
+namespace Ghost.SDK;
 
 public class GhostFatherConnection : IAsyncDisposable
 {

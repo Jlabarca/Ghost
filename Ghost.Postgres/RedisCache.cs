@@ -86,6 +86,18 @@ public class RedisCache : ICache
       await server.FlushDatabaseAsync();
     }
   }
+  public Task<List<T>> GetAllAsync<T>(T channelsActive)
+  {
+    if (_disposed) throw new ObjectDisposedException(nameof(RedisCache));
+
+    var channels = channelsActive.GetType().GetProperties()
+        .Where(p => p.PropertyType == typeof(bool))
+        .Select(p => p.Name)
+        .ToList();
+
+    var tasks = channels.Select(channel => GetAsync<T>(channel));
+    return Task.WhenAll(tasks).ContinueWith(t => t.Result.ToList());
+  }
 
   public async ValueTask DisposeAsync()
   {

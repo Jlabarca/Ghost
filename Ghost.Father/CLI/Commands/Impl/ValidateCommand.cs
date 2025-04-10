@@ -148,9 +148,9 @@ public class ValidateCommand : AsyncCommand<ValidateCommand.Settings>
         foreach (var error in errors)
         {
           table.AddRow(
-              $"[grey]{error.CommandName}[/]",
+              $"[grey]{Markup.Escape(error.CommandName ?? string.Empty)}[/]",
               "[red]Error[/]",
-              error.Message
+              Markup.Escape(error.Message ?? string.Empty)
           );
         }
       }
@@ -159,7 +159,7 @@ public class ValidateCommand : AsyncCommand<ValidateCommand.Settings>
       table.AddRow(
           "[blue]Commands[/]",
           Emoji.Known.Warning + " [yellow]Warnings[/]",
-          $"{warnings} warnings"
+          $"{warnings.Count} warnings"
       );
 
       if (settings.Verbose)
@@ -167,9 +167,9 @@ public class ValidateCommand : AsyncCommand<ValidateCommand.Settings>
         foreach (var warning in warnings)
         {
           table.AddRow(
-              $"[grey]{warning.CommandName}[/]",
+              $"[grey]{Markup.Escape(warning.CommandName ?? string.Empty)}[/]",
               "[yellow]Warning[/]",
-              warning.Message
+              Markup.Escape(warning.Message ?? string.Empty)
           );
         }
       }
@@ -248,6 +248,7 @@ public class ValidateCommand : AsyncCommand<ValidateCommand.Settings>
     return ValidationResult.Success();
   }
 
+  // Rest of the class remains unchanged
   private async Task<bool> ValidateInstallationAsync(Settings settings)
   {
     var success = true;
@@ -428,7 +429,7 @@ public class ValidateCommand : AsyncCommand<ValidateCommand.Settings>
       table.AddRow(
           "[blue]Redis[/]",
           Emoji.Known.Warning + " [yellow]Warning[/]",
-          $"Redis error: {ex.Message}"
+          $"Redis error: {Markup.Escape(ex.Message)}"
       );
     }
 

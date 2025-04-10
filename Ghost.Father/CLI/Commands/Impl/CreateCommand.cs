@@ -112,7 +112,7 @@ public class CreateCommand : AsyncCommand<CreateCommand.Settings>
         outputPath = Path.Combine(ghostInstallDir, GHOSTS_FOLDER_NAME);
       } else
       {
-        // Fall back to "ghosts" folder in the current directory
+        // Fall back to GHOSTS_FOLDER_NAME folder in the current directory
         outputPath = Path.Combine(AppContext.BaseDirectory, GHOSTS_FOLDER_NAME);
       }
 
@@ -185,10 +185,10 @@ public class CreateCommand : AsyncCommand<CreateCommand.Settings>
       // Show path based on installation directory
       if (!string.IsNullOrEmpty(ghostInstallDir))
       {
-        AnsiConsole.MarkupLine($"[grey]cd[/] {Path.Combine(ghostInstallDir, "ghost", projectDir.Name)}");
+        AnsiConsole.MarkupLine($"[grey]cd[/] {Path.Combine(ghostInstallDir, GHOSTS_FOLDER_NAME, projectDir.Name)}");
       } else
       {
-        AnsiConsole.MarkupLine($"[grey]cd[/] {Path.Combine("ghosts", projectDir.Name)}");
+        AnsiConsole.MarkupLine($"[grey]cd[/] {Path.Combine(GHOSTS_FOLDER_NAME, projectDir.Name)}");
       }
 
       AnsiConsole.MarkupLine("[grey]dotnet build[/]");

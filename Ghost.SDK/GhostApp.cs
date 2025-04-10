@@ -320,7 +320,7 @@ namespace Ghost.SDK
         /// <summary>
         /// Stop the application
         /// </summary>
-        public virtual async Task StopAsync()
+        public async virtual Task StopAsync()
         {
             G.LogInfo($"Stopping {GetType().Name}...");
 

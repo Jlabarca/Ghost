@@ -4,16 +4,17 @@ using Spectre.Console;
 using Spectre.Console.Cli;
 using System.ComponentModel;
 using System.Diagnostics;
+using System.Text;
 
 namespace Ghost.Father.CLI.Commands;
 
 public class InstallCommand : AsyncCommand<InstallCommand.Settings>
 {
-
   private readonly string sdkVersion;
+
   public InstallCommand(GhostConfig config)
   {
-    sdkVersion = "1.0.0"; //TODO: get sdkVersion - config.Core.Version;??
+    sdkVersion = config.App?.Version ?? "1.0.0";
   }
 
   public class Settings : CommandSettings
@@ -25,13 +26,17 @@ public class InstallCommand : AsyncCommand<InstallCommand.Settings>
     [CommandOption("--path")]
     [Description("Custom installation path")]
     public string? CustomInstallPath { get; set; }
+
+    [CommandOption("--repair")]
+    [Description("Repair existing installation")]
+    public bool Repair { get; set; }
   }
 
   private Settings _settings;
+
   public override async Task<int> ExecuteAsync(CommandContext context, Settings settings)
   {
     _settings = settings;
-
     var installPath = settings.CustomInstallPath ?? GetDefaultInstallPath();
 
     return await AnsiConsole.Status()
@@ -41,10 +46,10 @@ public class InstallCommand : AsyncCommand<InstallCommand.Settings>
           {
             await TerminateGhostProcessesAsync();
 
-            if (Directory.Exists(installPath) && !settings.Force)
+            if (Directory.Exists(installPath) && !settings.Force && !settings.Repair)
             {
               AnsiConsole.MarkupLine("[yellow]Ghost is already installed at:[/] " + installPath);
-              AnsiConsole.MarkupLine("Use --force to reinstall.");
+              AnsiConsole.MarkupLine("Use --force to reinstall or --repair to repair the installation.");
               return 1;
             }
 
@@ -81,7 +86,6 @@ public class InstallCommand : AsyncCommand<InstallCommand.Settings>
             var ghostExeName = OperatingSystem.IsWindows() ? "ghost.exe" : "ghost";
             var sourceExe = executablePath;
             var targetExe = Path.Combine(binDir, ghostExeName);
-
             ctx.Status($"Creating {ghostExeName}...");
             await CopyFileAsync(sourceExe, targetExe);
 
@@ -97,7 +101,6 @@ public class InstallCommand : AsyncCommand<InstallCommand.Settings>
                     UseShellExecute = false,
                     CreateNoWindow = true
                 };
-
                 var process = Process.Start(psi);
                 if (process != null)
                 {
@@ -116,7 +119,6 @@ public class InstallCommand : AsyncCommand<InstallCommand.Settings>
 
             // Copy templates
             ctx.Status("Installing templates...");
-
             var possibleTemplatePaths = new[]
             {
                 Path.Combine(sourceDir, "Templates"), Path.Combine(sourceDir, "Template", "Templates"),
@@ -153,7 +155,6 @@ public class InstallCommand : AsyncCommand<InstallCommand.Settings>
               {
                 var templateName = Path.GetFileName(templateFolder);
                 ctx.Status($"Installing template: {templateName}...");
-
                 var targetFolder = Path.Combine(targetTemplatesPath, templateName);
 
                 // Check if template already exists
@@ -161,8 +162,8 @@ public class InstallCommand : AsyncCommand<InstallCommand.Settings>
                 if (Directory.Exists(targetFolder) && !settings.Force)
                 {
                   var replaceTemplate = AnsiConsole.Confirm(
-                      $"Template '{templateName}' already exists. Replace it?", false);
-
+                      $"Template '{templateName}' already exists. Replace it?",
+                      false);
                   if (!replaceTemplate)
                   {
                     ctx.Status($"Skipping existing template: {templateName}");
@@ -192,7 +193,6 @@ public class InstallCommand : AsyncCommand<InstallCommand.Settings>
               }
             }
 
-
             // Add to PATH
             ctx.Status("Updating system PATH...");
             await UpdatePathAsync(binDir);
@@ -220,7 +220,6 @@ public class InstallCommand : AsyncCommand<InstallCommand.Settings>
             AnsiConsole.MarkupLine($"SDK libraries: {libsDir}");
             AnsiConsole.MarkupLine("\nRun [bold]ghost --help[/] to see available commands");
             return 0;
-            // Modify this part in the ExecuteAsync method:
           }
           catch (Exception ex)
           {
@@ -240,6 +239,385 @@ public class InstallCommand : AsyncCommand<InstallCommand.Settings>
             return 1;
           }
         });
+  }
+
+  /// <summary>
+  /// Builds the SDK and Core libraries and places them in the libs directory.
+  /// This uses the actual projects rather than creating mock implementations.
+  /// Also copies all dependencies to ensure reference projects work properly.
+  /// </summary>
+  private async Task<bool> BuildSdkLibrariesAsync(string libsDir, StatusContext ctx)
+  {
+    try
+    {
+      // Find the actual project files relative to the executing assembly
+      var executablePath = Process.GetCurrentProcess().MainModule?.FileName;
+      if (executablePath == null)
+      {
+        G.LogError("Failed to determine executable path");
+        return false;
+      }
+
+      var sourceDir = Path.GetDirectoryName(executablePath);
+      if (sourceDir == null)
+      {
+        G.LogError("Failed to determine source directory");
+        return false;
+      }
+
+      // Look for the solution directory (navigate up if needed)
+      ctx.Status("Locating project files...");
+      var solutionDir = FindSolutionDirectory(sourceDir);
+      if (solutionDir == null)
+      {
+        G.LogError("Could not find solution directory");
+        return false;
+      }
+
+      G.LogInfo($"Found solution directory: {solutionDir}");
+
+      // Find project paths
+      var coreProjPath = Path.Combine(solutionDir, "Ghost.Core", "Ghost.Core.csproj");
+      var sdkProjPath = Path.Combine(solutionDir, "Ghost.SDK", "Ghost.SDK.csproj");
+
+      if (!File.Exists(coreProjPath))
+      {
+        G.LogError($"Ghost.Core project not found at: {coreProjPath}");
+        return false;
+      }
+
+      if (!File.Exists(sdkProjPath))
+      {
+        G.LogError($"Ghost.SDK project not found at: {sdkProjPath}");
+        return false;
+      }
+
+      G.LogInfo($"Found project files: {coreProjPath} and {sdkProjPath}");
+
+      // Build Ghost.Core
+      ctx.Status("Building Ghost.Core...");
+      if (!await BuildProjectAsync(Path.GetDirectoryName(coreProjPath), "Ghost.Core.csproj"))
+      {
+        G.LogError("Failed to build Ghost.Core");
+        return false;
+      }
+
+      // Build Ghost.SDK (depends on Ghost.Core)
+      ctx.Status("Building Ghost.SDK...");
+      if (!await BuildProjectAsync(Path.GetDirectoryName(sdkProjPath), "Ghost.SDK.csproj"))
+      {
+        G.LogError("Failed to build Ghost.SDK");
+        return false;
+      }
+
+      // Copy built DLLs to libs directory
+      ctx.Status("Copying built libraries to libs directory...");
+
+      // Find the bin directories with the built DLLs
+      var coreBinDir = Path.Combine(Path.GetDirectoryName(coreProjPath), "bin");
+      var sdkBinDir = Path.Combine(Path.GetDirectoryName(sdkProjPath), "bin");
+
+      // Find the DLLs - check both Debug and Release configurations
+      string coreDllPath = null;
+      string sdkDllPath = null;
+
+      // Look for the newest DLL in either Debug or Release folders
+      foreach (var config in new[]
+      {
+          "Release", "Debug"
+      })
+      {
+        var corePath = FindDll(coreBinDir, config, "Ghost.Core.dll");
+        var sdkPath = FindDll(sdkBinDir, config, "Ghost.SDK.dll");
+
+        if (corePath != null && coreDllPath == null)
+          coreDllPath = corePath;
+
+        if (sdkPath != null && sdkDllPath == null)
+          sdkDllPath = sdkPath;
+
+        if (coreDllPath != null && sdkDllPath != null)
+          break;
+      }
+
+      if (coreDllPath == null || !File.Exists(coreDllPath))
+      {
+        G.LogError("Ghost.Core.dll not found after build");
+        return false;
+      }
+
+      if (sdkDllPath == null || !File.Exists(sdkDllPath))
+      {
+        G.LogError("Ghost.SDK.dll not found after build");
+        return false;
+      }
+
+      G.LogInfo($"Found built DLLs: {coreDllPath} and {sdkDllPath}");
+
+      // Create dependency analysis file to help troubleshoot dependency issues
+      var depsOutputFile = Path.Combine(libsDir, "dependencies.txt");
+      var depsWriter = new StreamWriter(depsOutputFile);
+      await depsWriter.WriteLineAsync($"Ghost.Core.dll: {coreDllPath}");
+      await depsWriter.WriteLineAsync($"Ghost.SDK.dll: {sdkDllPath}");
+      await depsWriter.WriteLineAsync("Dependencies:");
+
+      // Copy the DLLs to the libs directory
+      await CopyFileAsync(coreDllPath, Path.Combine(libsDir, "Ghost.Core.dll"));
+      await CopyFileAsync(sdkDllPath, Path.Combine(libsDir, "Ghost.SDK.dll"));
+
+      // Copy dependencies
+      var coreDllDir = Path.GetDirectoryName(coreDllPath);
+      var sdkDllDir = Path.GetDirectoryName(sdkDllPath);
+
+      // Create a HashSet to track copied files to avoid duplicates
+      var copiedFiles = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+      copiedFiles.Add("Ghost.Core.dll");
+      copiedFiles.Add("Ghost.SDK.dll");
+
+      // Copy all DLLs from Ghost.Core
+      if (coreDllDir != null)
+      {
+        await depsWriter.WriteLineAsync($"\nCore dependencies from: {coreDllDir}");
+        foreach (var file in Directory.GetFiles(coreDllDir, "*.dll"))
+        {
+          var fileName = Path.GetFileName(file);
+          if (!copiedFiles.Contains(fileName))
+          {
+            await depsWriter.WriteLineAsync($"  {fileName}");
+            var targetPath = Path.Combine(libsDir, fileName);
+            await CopyFileAsync(file, targetPath);
+            copiedFiles.Add(fileName);
+          }
+        }
+      }
+
+      // Copy all DLLs from Ghost.SDK
+      if (sdkDllDir != null)
+      {
+        await depsWriter.WriteLineAsync($"\nSDK dependencies from: {sdkDllDir}");
+        foreach (var file in Directory.GetFiles(sdkDllDir, "*.dll"))
+        {
+          var fileName = Path.GetFileName(file);
+          if (!copiedFiles.Contains(fileName))
+          {
+            await depsWriter.WriteLineAsync($"  {fileName}");
+            var targetPath = Path.Combine(libsDir, fileName);
+            await CopyFileAsync(file, targetPath);
+            copiedFiles.Add(fileName);
+          }
+        }
+      }
+
+      // Also check for dependencies in runtimes directories
+      if (coreDllDir != null)
+      {
+        var runtimesDir = Path.Combine(Path.GetDirectoryName(coreDllDir), "runtimes");
+        if (Directory.Exists(runtimesDir))
+        {
+          await depsWriter.WriteLineAsync($"\nRuntime dependencies for Core:");
+          var targetRuntimesDir = Path.Combine(libsDir, "runtimes");
+          Directory.CreateDirectory(targetRuntimesDir);
+
+          // Copy all runtime-specific DLLs
+          foreach (var runtimeDir in Directory.GetDirectories(runtimesDir))
+          {
+            var runtimeName = Path.GetFileName(runtimeDir);
+            await depsWriter.WriteLineAsync($"  {runtimeName}/");
+
+            // Create runtime directory in target
+            var targetRuntimeDir = Path.Combine(targetRuntimesDir, runtimeName);
+            Directory.CreateDirectory(targetRuntimeDir);
+
+            // Copy all files in the runtime directory
+            foreach (var dir in Directory.GetDirectories(runtimeDir))
+            {
+              var dirName = Path.GetFileName(dir);
+              var targetSubDir = Path.Combine(targetRuntimeDir, dirName);
+              Directory.CreateDirectory(targetSubDir);
+
+              foreach (var file in Directory.GetFiles(dir, "*.dll"))
+              {
+                var fileName = Path.GetFileName(file);
+                await depsWriter.WriteLineAsync($"    {dirName}/{fileName}");
+                var targetPath = Path.Combine(targetSubDir, fileName);
+                await CopyFileAsync(file, targetPath);
+              }
+            }
+          }
+        }
+      }
+
+      // Generate a list of all MS Extensions packages to help with project dependencies
+      var msExtensions = copiedFiles
+          .Where(f => f.StartsWith("Microsoft.Extensions.", StringComparison.OrdinalIgnoreCase))
+          .OrderBy(f => f)
+          .ToList();
+
+      if (msExtensions.Count > 0)
+      {
+        await depsWriter.WriteLineAsync("\nMicrosoft.Extensions dependencies found:");
+        foreach (var dll in msExtensions)
+        {
+          await depsWriter.WriteLineAsync($"  {dll}");
+        }
+      }
+
+      // Close the dependencies writer
+      depsWriter.Close();
+
+      G.LogInfo($"Successfully built and copied SDK libraries to {libsDir}");
+      G.LogInfo($"Dependency information written to {depsOutputFile}");
+      return true;
+    }
+    catch (Exception ex)
+    {
+      G.LogError(ex, "Failed to build SDK libraries");
+      return false;
+    }
+  }
+  /// <summary>
+  /// Finds a DLL in the specified bin directory and configuration
+  /// </summary>
+  private string FindDll(string binDir, string configuration, string dllName)
+  {
+    try
+    {
+      // Look in all target framework directories (net9.0, netstandard2.0, etc.)
+      var configDir = Path.Combine(binDir, configuration);
+      if (!Directory.Exists(configDir))
+        return null;
+
+      // Get all directories in the config folder (usually framework versions)
+      foreach (var frameworkDir in Directory.GetDirectories(configDir))
+      {
+        var dllPath = Path.Combine(frameworkDir, dllName);
+        if (File.Exists(dllPath))
+          return dllPath;
+      }
+
+      // Also check directly in the config folder
+      var directPath = Path.Combine(configDir, dllName);
+      if (File.Exists(directPath))
+        return directPath;
+
+      return null;
+    }
+    catch (Exception ex)
+    {
+      G.LogError(ex, $"Error finding DLL {dllName} in {binDir}");
+      return null;
+    }
+  }
+
+  /// <summary>
+  /// Finds the solution directory by searching up from the given directory
+  /// </summary>
+  private string FindSolutionDirectory(string startDir)
+  {
+    var currentDir = startDir;
+
+    // Look up the directory tree
+    while (currentDir != null)
+    {
+      // Look for sln files
+      if (Directory.GetFiles(currentDir, "*.sln").Any())
+      {
+        return currentDir;
+      }
+
+      // Look for specific project directories that would indicate we're in the right place
+      if (Directory.Exists(Path.Combine(currentDir, "Ghost.Core")) &&
+          Directory.Exists(Path.Combine(currentDir, "Ghost.SDK")))
+      {
+        return currentDir;
+      }
+
+      // Move up one directory
+      currentDir = Directory.GetParent(currentDir)?.FullName;
+    }
+
+    // If we can't find the solution directory, try standard paths
+    G.LogWarn("Solution directory not found via traversal. Checking standard paths...");
+
+    var baseDir = startDir;
+
+    // Check standard paths relative to bin/Debug or bin/Release
+    var possiblePaths = new[]
+    {
+        Path.Combine(baseDir, "..", "..", ".."), // For bin/Debug/net9.0
+        Path.Combine(baseDir, "..", "..", "..", ".."), // For bin/Debug
+        Path.Combine(baseDir, "..", ".."), // For published app
+        Path.Combine(baseDir, "..", "..", "..", "..", ".."), // For test runners
+        baseDir // Current directory
+    };
+
+    foreach (var path in possiblePaths)
+    {
+      try
+      {
+        var fullPath = Path.GetFullPath(path);
+        if (Directory.Exists(Path.Combine(fullPath, "Ghost.Core")) &&
+            Directory.Exists(Path.Combine(fullPath, "Ghost.SDK")))
+        {
+          return fullPath;
+        }
+      }
+      catch
+      {
+        // Invalid path, skip
+      }
+    }
+
+    return null;
+  }
+
+  /// <summary>
+  /// Builds a project using dotnet CLI
+  /// </summary>
+  private async Task<bool> BuildProjectAsync(string projectDir, string projectFile)
+  {
+    try
+    {
+      var psi = new ProcessStartInfo
+      {
+          FileName = "dotnet",
+          Arguments = $"build \"{projectFile}\" -c Release",
+          WorkingDirectory = projectDir,
+          RedirectStandardOutput = true,
+          RedirectStandardError = true,
+          UseShellExecute = false,
+          CreateNoWindow = true
+      };
+
+      G.LogInfo($"Building project: dotnet {psi.Arguments} in {projectDir}");
+
+      var process = Process.Start(psi);
+      if (process == null)
+      {
+        G.LogError($"Failed to start dotnet build process for {projectDir}");
+        return false;
+      }
+
+      var output = await process.StandardOutput.ReadToEndAsync();
+      var error = await process.StandardError.ReadToEndAsync();
+
+      await process.WaitForExitAsync();
+
+      if (process.ExitCode != 0)
+      {
+        G.LogError($"Build failed for {projectDir}: {error}");
+        G.LogError($"Output: {output}");
+        return false;
+      }
+
+      G.LogInfo($"Successfully built {projectFile}");
+      return true;
+    }
+    catch (Exception ex)
+    {
+      G.LogError(ex, $"Error building project in {projectDir}");
+      return false;
+    }
   }
 
   private void SafeDirectoryDelete(string path)
@@ -367,7 +745,6 @@ public class InstallCommand : AsyncCommand<InstallCommand.Settings>
 
         // Create temp file first, then move to target
         var tempFilePath = $"{targetPath}.tmp";
-
         await using (var targetStream = new FileStream(
             tempFilePath,
             FileMode.Create,
@@ -437,7 +814,7 @@ public class InstallCommand : AsyncCommand<InstallCommand.Settings>
     }
   }
 
-// Helper method for Windows to replace a file in use
+  // Helper method for Windows to replace a file in use
   private static void MoveFileWithReplace(string sourcePath, string targetPath)
   {
     // For Windows, we can use P/Invoke to MoveFileEx if needed
@@ -453,7 +830,7 @@ public class InstallCommand : AsyncCommand<InstallCommand.Settings>
     }
   }
 
-// Alternative approach to copy files when standard methods fail
+  // Alternative approach to copy files when standard methods fail
   private bool TryAlternativeCopy(string sourcePath, string targetPath)
   {
     try
@@ -468,7 +845,6 @@ public class InstallCommand : AsyncCommand<InstallCommand.Settings>
             UseShellExecute = false,
             CreateNoWindow = true
         };
-
         var process = Process.Start(psi);
         process?.WaitForExit();
         return process?.ExitCode == 0;
@@ -482,7 +858,6 @@ public class InstallCommand : AsyncCommand<InstallCommand.Settings>
             UseShellExecute = false,
             CreateNoWindow = true
         };
-
         var process = Process.Start(psi);
         process?.WaitForExit();
         return process?.ExitCode == 0;
@@ -493,6 +868,7 @@ public class InstallCommand : AsyncCommand<InstallCommand.Settings>
       return false;
     }
   }
+
   private async Task UpdatePathAsync(string binDir)
   {
     // Add the bin directory to the system PATH
@@ -510,455 +886,6 @@ public class InstallCommand : AsyncCommand<InstallCommand.Settings>
 
     await Task.CompletedTask;
   }
-
-  /// <summary>
-  /// Builds the SDK and Core libraries and places them in the libs directory
-  /// </summary>
-  private async Task<bool> BuildSdkLibrariesAsync(string libsDir, StatusContext ctx)
-  {
-    try
-    {
-      // Create temp directories for SDK and Core projects
-      var tempDir = Path.Combine(Path.GetTempPath(), $"ghost-sdk-build-{Guid.NewGuid()}");
-      Directory.CreateDirectory(tempDir);
-
-      var coreDir = Path.Combine(tempDir, "Ghost.Core");
-      var sdkDir = Path.Combine(tempDir, "Ghost.SDK");
-
-      Directory.CreateDirectory(coreDir);
-      Directory.CreateDirectory(sdkDir);
-
-      try
-      {
-        // Create Ghost.Core project
-        ctx.Status("Creating Ghost.Core project...");
-        await CreateCoreProjectAsync(coreDir, sdkVersion);
-
-        // Build Ghost.Core
-        ctx.Status("Building Ghost.Core...");
-        if (!await BuildProjectAsync(coreDir))
-        {
-          G.LogError("Failed to build Ghost.Core");
-          return false;
-        }
-
-        // Create Ghost.SDK project
-        ctx.Status("Creating Ghost.SDK project...");
-        await CreateSdkProjectAsync(sdkDir, sdkVersion);
-
-        // Build Ghost.SDK
-        ctx.Status("Building Ghost.SDK...");
-        if (!await BuildProjectAsync(sdkDir))
-        {
-          G.LogError("Failed to build Ghost.SDK");
-          return false;
-        }
-
-        // Copy built DLLs to libs directory
-        var coreDllPath = Path.Combine(coreDir, "bin", "Debug", "net8.0", "Ghost.Core.dll");
-        var sdkDllPath = Path.Combine(sdkDir, "bin", "Debug", "net8.0", "Ghost.SDK.dll");
-
-        if (File.Exists(coreDllPath) && File.Exists(sdkDllPath))
-        {
-          await CopyFileAsync(coreDllPath, Path.Combine(libsDir, "Ghost.Core.dll"));
-          await CopyFileAsync(sdkDllPath, Path.Combine(libsDir, "Ghost.SDK.dll"));
-
-          // Also copy any dependencies
-          var coreDepDir = Path.GetDirectoryName(coreDllPath);
-          var sdkDepDir = Path.GetDirectoryName(sdkDllPath);
-
-          if (coreDepDir != null)
-          {
-            foreach (var file in Directory.GetFiles(coreDepDir))
-            {
-              if (!file.EndsWith(".dll") || Path.GetFileName(file) == "Ghost.Core.dll")
-                continue;
-
-              await CopyFileAsync(file, Path.Combine(libsDir, Path.GetFileName(file)));
-            }
-          }
-
-          if (sdkDepDir != null)
-          {
-            foreach (var file in Directory.GetFiles(sdkDepDir))
-            {
-              if (!file.EndsWith(".dll") || Path.GetFileName(file) == "Ghost.SDK.dll" ||
-                  Path.GetFileName(file) == "Ghost.Core.dll" ||
-                  File.Exists(Path.Combine(libsDir, Path.GetFileName(file))))
-                continue;
-
-              await CopyFileAsync(file, Path.Combine(libsDir, Path.GetFileName(file)));
-            }
-          }
-
-          return true;
-        } else
-        {
-          G.LogError($"SDK libraries not found after build. Core: {File.Exists(coreDllPath)}, SDK: {File.Exists(sdkDllPath)}");
-          return false;
-        }
-      }
-      finally
-      {
-        // Clean up temp directory
-        try
-        {
-          Directory.Delete(tempDir, true);
-        }
-        catch (Exception ex)
-        {
-          G.LogWarn($"Failed to clean up temp directory: {ex.Message}");
-        }
-      }
-    }
-    catch (Exception ex)
-    {
-      G.LogError(ex, "Failed to build SDK libraries");
-      return false;
-    }
-  }
-
-  /// <summary>
-  /// Creates the Ghost.Core project
-  /// </summary>
-  private async Task CreateCoreProjectAsync(string coreDir, string version)
-  {
-    // Create minimal Core implementation
-    var coreCode = @"using System;
-
-namespace Ghost.Core 
-{
-    public enum ErrorCode 
-    { 
-        Unknown, 
-        ProcessError, 
-        StorageError, 
-        ConfigurationError, 
-        NetworkError,
-        TemplateError,
-        TemplateNotFound,
-        GitError,
-        InstallationError
-    }
-    
-    public class GhostException : Exception 
-    {
-        public ErrorCode Code { get; }
-        
-        public GhostException(string message) : base(message) 
-        {
-            Code = ErrorCode.Unknown;
-        }
-        
-        public GhostException(string message, Exception innerException) 
-            : base(message, innerException) 
-        {
-            Code = ErrorCode.Unknown;
-        }
-        
-        public GhostException(string message, ErrorCode code) : base(message) 
-        {
-            Code = code;
-        }
-        
-        public GhostException(string message, Exception innerException, ErrorCode code) 
-            : base(message, innerException) 
-        {
-            Code = code;
-        }
-    }
-}
-
-namespace Ghost.Core.Logging
-{
-    public interface ILogger
-    {
-        void Log(string message, string level = ""INFO"", Exception ex = null);
-    }
-}";
-
-    var coreCsproj = $@"<Project Sdk=""Microsoft.NET.Sdk"">
-  <PropertyGroup>
-    <TargetFramework>net8.0</TargetFramework>
-    <ImplicitUsings>enable</ImplicitUsings>
-    <Nullable>enable</Nullable>
-    <Version>{version}</Version>
-    <Authors>Ghost Team</Authors>
-    <Description>Core library for Ghost applications</Description>
-  </PropertyGroup>
-</Project>";
-
-    // Create directories
-    Directory.CreateDirectory(Path.Combine(coreDir, "Logging"));
-
-    // Write Core files
-    await File.WriteAllTextAsync(Path.Combine(coreDir, "GhostCore.cs"), coreCode);
-    await File.WriteAllTextAsync(Path.Combine(coreDir, "Ghost.Core.csproj"), coreCsproj);
-  }
-
-  /// <summary>
-  /// Creates the Ghost.SDK project
-  /// </summary>
-  private async Task CreateSdkProjectAsync(string sdkDir, string version)
-  {
-    // Create minimal SDK implementation
-    var sdkCode = @"using System;
-using System.Collections.Generic;
-using System.Threading.Tasks;
-
-namespace Ghost 
-{
-    public static class G 
-    {
-        public static void LogInfo(string message) => Console.WriteLine($""[INFO] {message}"");
-        public static void LogDebug(string message) => Console.WriteLine($""[DEBUG] {message}"");
-        public static void LogWarn(string message) => Console.WriteLine($""[WARN] {message}"");
-        public static void LogError(string message, Exception ex = null) 
-        {
-            Console.WriteLine($""[ERROR] {message}"");
-            if (ex != null) Console.WriteLine(ex.ToString());
-        }
-        
-        public static void LogInfo(string message, params object[] args)
-        {
-            LogInfo(string.Format(message, args));
-        }
-
-        public static void LogDebug(string message, params object[] args)
-        {
-            LogDebug(string.Format(message, args));
-        }
-
-        public static void LogWarn(string message, params object[] args)
-        {
-            LogWarn(string.Format(message, args));
-        }
-
-        public static void LogError(string message, params object[] args)
-        {
-            LogError(string.Format(message, args));
-        }
-
-        public static void LogError(Exception ex, string message, params object[] args)
-        {
-            LogError(string.Format(message, args), ex);
-        }
-    }
-}
-
-namespace Ghost.SDK 
-{
-    using Ghost.Core;
-    
-    public class GhostApp 
-    {
-        public GhostApp() 
-        {
-            Ghost.G.LogInfo(""Creating Ghost application"");
-        }
-        
-        public virtual Task RunAsync(IEnumerable<string> args) 
-        {
-            Ghost.G.LogInfo(""Hello from Ghost SDK!"");
-            return Task.CompletedTask;
-        }
-        
-        public virtual Task ExecuteAsync(IEnumerable<string> args) 
-        {
-            return RunAsync(args);
-        }
-    }
-}";
-
-    var sdkCsproj = $@"<Project Sdk=""Microsoft.NET.Sdk"">
-  <PropertyGroup>
-    <TargetFramework>net8.0</TargetFramework>
-    <ImplicitUsings>enable</ImplicitUsings>
-    <Nullable>enable</Nullable>
-    <Version>{version}</Version>
-    <Authors>Ghost Team</Authors>
-    <Description>SDK for building Ghost applications</Description>
-  </PropertyGroup>
-  <ItemGroup>
-    <ProjectReference Include=""..\Ghost.Core\Ghost.Core.csproj"" />
-  </ItemGroup>
-</Project>";
-
-    // Write SDK files
-    await File.WriteAllTextAsync(Path.Combine(sdkDir, "GhostSDK.cs"), sdkCode);
-    await File.WriteAllTextAsync(Path.Combine(sdkDir, "Ghost.SDK.csproj"), sdkCsproj);
-  }
-
-  /// <summary>
-  /// Builds a project
-  /// </summary>
-  private async Task<bool> BuildProjectAsync(string projectDir)
-  {
-    try
-    {
-      var psi = new ProcessStartInfo
-      {
-          FileName = "dotnet",
-          Arguments = "build",
-          WorkingDirectory = projectDir,
-          RedirectStandardOutput = true,
-          RedirectStandardError = true,
-          UseShellExecute = false,
-          CreateNoWindow = true
-      };
-
-      var process = Process.Start(psi);
-      if (process == null)
-      {
-        G.LogError($"Failed to start dotnet build process for {projectDir}");
-        return false;
-      }
-
-      var output = await process.StandardOutput.ReadToEndAsync();
-      var error = await process.StandardError.ReadToEndAsync();
-      await process.WaitForExitAsync();
-
-      if (process.ExitCode != 0)
-      {
-        G.LogError($"Build failed for {projectDir}: {error}");
-        return false;
-      }
-
-      return true;
-    }
-    catch (Exception ex)
-    {
-      G.LogError(ex, $"Error building project in {projectDir}");
-      return false;
-    }
-  }
-
-private async Task TerminateGhostProcessesAsync()
-{
-    try
-    {
-        AnsiConsole.MarkupLine("[grey]Checking for running Ghost processes...[/]");
-        var ghostProcesses = Process.GetProcesses()
-            .Where(p => {
-                try
-                {
-                    return p.ProcessName.ToLowerInvariant().Contains("ghost") ||
-                           (p.MainModule?.FileName?.Contains("\\Ghost\\", StringComparison.OrdinalIgnoreCase) ?? false);
-                }
-                catch
-                {
-                    // Process access might be denied, skip it
-                    return false;
-                }
-            })
-            .ToList();
-
-        if (ghostProcesses.Count > 0)
-        {
-            AnsiConsole.MarkupLine($"[yellow]Found {ghostProcesses.Count} running Ghost processes that need to be terminated:[/]");
-
-            foreach (var process in ghostProcesses)
-            {
-                try
-                {
-                    string processDetails = $"{process.ProcessName} (PID: {process.Id})";
-
-                    try
-                    {
-                        if (process.MainModule != null)
-                        {
-                            processDetails += $" - {process.MainModule.FileName}";
-                        }
-                    }
-                    catch
-                    {
-                        // Ignore if we can't get the module info
-                    }
-
-                    AnsiConsole.MarkupLine($"  [grey]· {processDetails}[/]");
-                }
-                catch
-                {
-                    AnsiConsole.MarkupLine($"  [grey]· Unknown process (PID: {process.Id})[/]");
-                }
-            }
-
-            if (!_settings.Force)
-            {
-                var confirmKill = AnsiConsole.Confirm("[yellow]Would you like to terminate these processes?[/]", true);
-                if (!confirmKill)
-                {
-                    throw new GhostException(
-                        "Installation cannot proceed while Ghost processes are running. Please terminate them manually or use --force.",
-                        ErrorCode.InstallationError);
-                }
-            }
-
-            foreach (var process in ghostProcesses)
-            {
-                try
-                {
-                    AnsiConsole.MarkupLine($"[grey]Terminating process: {process.ProcessName} (PID: {process.Id})[/]");
-                    process.Kill(true); // true = kill entire process tree
-                    await Task.Delay(500); // Brief delay to ensure process is terminated
-                }
-                catch (Exception ex)
-                {
-                    AnsiConsole.MarkupLine($"[yellow]Warning:[/] Could not terminate process {process.Id}: {ex.Message}");
-                }
-            }
-
-            // Give processes time to properly shut down
-            AnsiConsole.MarkupLine("[grey]Waiting for processes to terminate...[/]");
-            await Task.Delay(2000);
-
-            // Double-check if all processes were terminated
-            var remainingProcesses = Process.GetProcesses()
-                .Where(p => {
-                    try
-                    {
-                        return p.ProcessName.ToLowerInvariant().Contains("ghost") ||
-                               (p.MainModule?.FileName?.Contains("\\Ghost\\", StringComparison.OrdinalIgnoreCase) ?? false);
-                    }
-                    catch
-                    {
-                        return false;
-                    }
-                })
-                .ToList();
-
-            if (remainingProcesses.Count > 0 && _settings.Force)
-            {
-                AnsiConsole.MarkupLine("[yellow]Warning:[/] Some Ghost processes could not be terminated. Installation may fail.");
-            }
-            else if (remainingProcesses.Count > 0)
-            {
-                throw new GhostException(
-                    "Could not terminate all Ghost processes. Please terminate them manually or use --force.",
-                    ErrorCode.InstallationError);
-            }
-            else
-            {
-                AnsiConsole.MarkupLine("[green]All Ghost processes terminated successfully.[/]");
-            }
-        }
-        else
-        {
-            AnsiConsole.MarkupLine("[grey]No running Ghost processes found.[/]");
-        }
-    }
-    catch (Exception ex) when (!(ex is GhostException))
-    {
-        AnsiConsole.MarkupLine($"[yellow]Warning:[/] Error checking for Ghost processes: {ex.Message}");
-        if (!_settings.Force)
-        {
-            throw new GhostException(
-                "Could not check for running Ghost processes. Please ensure no Ghost processes are running or use --force.",
-                ex,
-                ErrorCode.InstallationError);
-        }
-    }
-}
 
   private string GetDefaultInstallPath()
   {
@@ -980,59 +907,221 @@ private async Task TerminateGhostProcessesAsync()
     }
   }
 
-  /// <summary>
-  /// Creates a template for a .ghost.yaml file inside the templates directory
-  /// </summary>
-  private async Task UpdateTemplateForLocalReferencesAsync(string templatesDir)
+  private async Task TerminateGhostProcessesAsync()
   {
     try
     {
-      // Find all .ghost.yaml.tpl files in the templates directory and subdirectories
-      var templateFiles = Directory.GetFiles(templatesDir, ".ghost.yaml.tpl", SearchOption.AllDirectories);
+      AnsiConsole.MarkupLine("[grey]Checking for running Ghost processes...[/]");
 
-      foreach (var file in templateFiles)
-      {
-        var content = await File.ReadAllTextAsync(file);
-
-        // Update template to point to local references
-        // This may vary based on your specific template format
-
-        await File.WriteAllTextAsync(file, content);
-      }
-
-      // Update project template files to use local references
-      var csprojTemplates = Directory.GetFiles(templatesDir, "*.csproj.tpl", SearchOption.AllDirectories);
-
-      foreach (var file in csprojTemplates)
-      {
-        var content = await File.ReadAllTextAsync(file);
-
-        // Replace NuGet package references with local references
-        var packageRefPattern = @"<PackageReference\s+Include=""Ghost\.SDK""\s+Version=""[^""]*""\s*/>";
-        var localRefReplacement = @"<Reference Include=""Ghost.SDK"">
-      <HintPath>$(GhostInstallDir)\libs\Ghost.SDK.dll</HintPath>
-    </Reference>
-    <Reference Include=""Ghost.Core"">
-      <HintPath>$(GhostInstallDir)\libs\Ghost.Core.dll</HintPath>
-    </Reference>";
-
-        if (content.Contains("<PackageReference Include=\"Ghost.SDK\""))
-        {
-          content = System.Text.RegularExpressions.Regex.Replace(content, packageRefPattern, localRefReplacement);
-
-          // Add property group for Ghost install path
-          if (!content.Contains("GhostInstallDir"))
+      var ghostProcesses = Process.GetProcesses()
+          .Where(p =>
           {
-            content = content.Replace("<PropertyGroup>", "<PropertyGroup>\n    <GhostInstallDir Condition=\"'$(GhostInstallDir)' == ''\">$(GHOST_INSTALL)</GhostInstallDir>");
-          }
+            try
+            {
+              return p.ProcessName.ToLowerInvariant().Contains("ghost") ||
+                     (p.MainModule?.FileName?.Contains("\\Ghost\\", StringComparison.OrdinalIgnoreCase) ?? false);
+            }
+            catch
+            {
+              // Process access might be denied, skip it
+              return false;
+            }
+          })
+          .ToList();
 
-          await File.WriteAllTextAsync(file, content);
+      if (ghostProcesses.Count > 0)
+      {
+        AnsiConsole.MarkupLine($"[yellow]Found {ghostProcesses.Count} running Ghost processes that need to be terminated:[/]");
+
+        foreach (var process in ghostProcesses)
+        {
+          try
+          {
+            string processDetails = $"{process.ProcessName} (PID: {process.Id})";
+            try
+            {
+              if (process.MainModule != null)
+              {
+                processDetails += $" - {process.MainModule.FileName}";
+              }
+            }
+            catch
+            {
+              // Ignore if we can't get the module info
+            }
+
+            AnsiConsole.MarkupLine($" [grey]· {processDetails}[/]");
+          }
+          catch
+          {
+            AnsiConsole.MarkupLine($" [grey]· Unknown process (PID: {process.Id})[/]");
+          }
         }
+
+        if (!_settings.Force)
+        {
+          var confirmKill = AnsiConsole.Confirm("[yellow]Would you like to terminate these processes?[/]", true);
+          if (!confirmKill)
+          {
+            throw new GhostException(
+                "Installation cannot proceed while Ghost processes are running. Please terminate them manually or use --force.",
+                ErrorCode.InstallationError);
+          }
+        }
+
+        foreach (var process in ghostProcesses)
+        {
+          try
+          {
+            AnsiConsole.MarkupLine($"[grey]Terminating process: {process.ProcessName} (PID: {process.Id})[/]");
+            process.Kill(true); // true = kill entire process tree
+            await Task.Delay(500); // Brief delay to ensure process is terminated
+          }
+          catch (Exception ex)
+          {
+            AnsiConsole.MarkupLine($"[yellow]Warning:[/] Could not terminate process {process.Id}: {ex.Message}");
+          }
+        }
+
+        // Give processes time to properly shut down
+        AnsiConsole.MarkupLine("[grey]Waiting for processes to terminate...[/]");
+        await Task.Delay(2000);
+
+        // Double-check if all processes were terminated
+        var remainingProcesses = Process.GetProcesses()
+            .Where(p =>
+            {
+              try
+              {
+                return p.ProcessName.ToLowerInvariant().Contains("ghost") ||
+                       (p.MainModule?.FileName?.Contains("\\Ghost\\", StringComparison.OrdinalIgnoreCase) ?? false);
+              }
+              catch
+              {
+                return false;
+              }
+            })
+            .ToList();
+
+        if (remainingProcesses.Count > 0 && _settings.Force)
+        {
+          AnsiConsole.MarkupLine("[yellow]Warning:[/] Some Ghost processes could not be terminated. Installation may fail.");
+        } else if (remainingProcesses.Count > 0)
+        {
+          throw new GhostException(
+              "Could not terminate all Ghost processes. Please terminate them manually or use --force.",
+              ErrorCode.InstallationError);
+        } else
+        {
+          AnsiConsole.MarkupLine("[green]All Ghost processes terminated successfully.[/]");
+        }
+      } else
+      {
+        AnsiConsole.MarkupLine("[grey]No running Ghost processes found.[/]");
       }
+    }
+    catch (Exception ex) when (!(ex is GhostException))
+    {
+      AnsiConsole.MarkupLine($"[yellow]Warning:[/] Error checking for Ghost processes: {ex.Message}");
+
+      if (!_settings.Force)
+      {
+        throw new GhostException(
+            "Could not check for running Ghost processes. Please ensure no Ghost processes are running or use --force.",
+            ex,
+            ErrorCode.InstallationError);
+      }
+    }
+  }
+
+  /// <summary>
+/// Updates templates with dependency information to ensure they work with local library references
+/// </summary>
+private async Task UpdateTemplatesWithDependenciesAsync(string templatesDir, string libsDir, StatusContext ctx)
+{
+    try
+    {
+        ctx.Status("Updating templates with dependency information...");
+
+        // Get a list of all project template files
+        var csprojTemplates = Directory.GetFiles(templatesDir, "*.csproj.tpl", SearchOption.AllDirectories);
+
+        if (csprojTemplates.Length == 0)
+        {
+            G.LogInfo("No project templates found to update");
+            return;
+        }
+
+        G.LogInfo($"Found {csprojTemplates.Length} project templates to update");
+
+        // Get the list of MS Extensions DLLs in the libs directory
+        var msExtensionsDlls = Directory.GetFiles(libsDir, "Microsoft.Extensions.*.dll")
+            .Select(Path.GetFileName)
+            .OrderBy(f => f)
+            .ToList();
+
+        // Create the packageReferences section for the template
+        var packageRefs = new StringBuilder();
+        packageRefs.AppendLine("    <!-- Required dependencies when using local libs -->");
+
+        foreach (var dll in msExtensionsDlls)
+        {
+            var packageName = Path.GetFileNameWithoutExtension(dll);
+            packageRefs.AppendLine($"    <PackageReference Include=\"{packageName}\" Version=\"$(MicrosoftExtensionsVersion)\" Condition=\"'{{{{ use_local_libs }}}}' == 'true'\" />");
+        }
+
+        // Update each template
+        foreach (var templateFile in csprojTemplates)
+        {
+            var templateName = Path.GetFileName(templateFile);
+            ctx.Status($"Updating template: {templateName}...");
+
+            var content = await File.ReadAllTextAsync(templateFile);
+
+            // Check if the template already has our versions defined
+            if (!content.Contains("<MicrosoftExtensionsVersion>"))
+            {
+                // Add the property group for versions
+                content = content.Replace("<PropertyGroup>",
+                    "<PropertyGroup>\n" +
+                    "    <MicrosoftExtensionsVersion>9.0.0</MicrosoftExtensionsVersion>");
+            }
+
+            // Check if template already has required dependencies pattern
+            if (!content.Contains("<!-- Required dependencies when using local libs -->"))
+            {
+                // Find where to insert dependencies
+                var insertPoint = content.IndexOf("<PackageReference Include=\"Ghost.SDK\"");
+                if (insertPoint > 0)
+                {
+                    // Insert before the Ghost.SDK PackageReference
+                    var beforeInsert = content.Substring(0, insertPoint);
+                    var afterInsert = content.Substring(insertPoint);
+
+                    content = beforeInsert + packageRefs.ToString() + "\n    " + afterInsert;
+                }
+            }
+
+            // Update references to use Private=false to avoid copying the DLLs
+            if (content.Contains("<Reference Include=\"Ghost.SDK\"") && !content.Contains("<Private>false</Private>"))
+            {
+                content = content.Replace("<HintPath>$(GhostInstallDir)\\libs\\Ghost.SDK.dll</HintPath>",
+                    "<HintPath>$(GhostInstallDir)\\libs\\Ghost.SDK.dll</HintPath>\n      <Private>false</Private>");
+
+                content = content.Replace("<HintPath>$(GhostInstallDir)\\libs\\Ghost.Core.dll</HintPath>",
+                    "<HintPath>$(GhostInstallDir)\\libs\\Ghost.Core.dll</HintPath>\n      <Private>false</Private>");
+            }
+
+            // Write updated content back to the template file
+            await File.WriteAllTextAsync(templateFile, content);
+            G.LogInfo($"Updated template: {templateName}");
+        }
+
+        G.LogInfo("All templates have been updated with dependency information");
     }
     catch (Exception ex)
     {
-      G.LogError(ex, "Failed to update templates for local references");
+        G.LogError(ex, "Failed to update templates with dependency information");
     }
-  }
+}
 }

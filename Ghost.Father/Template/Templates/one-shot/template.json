@@ -1,0 +1,17 @@
+{
+  "name": "one-shot",
+  "description": "Template for one-shot Ghost applications that run and exit",
+  "author": "Ghost",
+  "version": "1.0.0",
+  "variables": {
+    "defaultNamespace": "{{ safe_name }}",
+    "defaultDescription": "A one-shot Ghost application"
+  },
+  "requiredPackages": {
+    "Ghost.SDK": "1.0.0",
+    "Ghost.Core": "1.0.0",
+    "Microsoft.Extensions.DependencyInjection": "9.0.0",
+    "Microsoft.Extensions.Configuration.Json": "9.0.0"
+  },
+  "tags": ["one-shot", "cli", "command-line"]
+}

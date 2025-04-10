@@ -1,0 +1,17 @@
+{
+  "name": "service",
+  "description": "Template for long-running Ghost service applications",
+  "author": "Ghost",
+  "version": "1.0.0",
+  "variables": {
+    "defaultDescription": "A long-running Ghost service"
+  },
+  "requiredPackages": {
+    "Ghost.SDK": "1.0.0",
+    "Ghost.Core": "1.0.0",
+    "Microsoft.Extensions.Configuration.Json": "9.0.0",
+    "Microsoft.Extensions.DependencyInjection": "9.0.0",
+    "Microsoft.Extensions.Hosting": "9.0.0"
+  },
+  "tags": ["service", "background", "daemon", "long-running"]
+}

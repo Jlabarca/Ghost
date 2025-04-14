@@ -33,7 +33,7 @@ public class GhostData : IGhostData
 
     public Task InitializeAsync()
     {
-        G.LogInfo("Initializing GhostData...");
+        L.LogInfo("Initializing GhostData...");
         //TODO ensure schema
         return Task.CompletedTask;
     }

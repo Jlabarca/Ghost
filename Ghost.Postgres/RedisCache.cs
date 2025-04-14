@@ -1,6 +1,5 @@
 using StackExchange.Redis;
 using System.Net;
-using System.Security.Cryptography;
 using System.Text.Json;
 
 namespace Ghost.Core.Data;

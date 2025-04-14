@@ -1,157 +1,192 @@
 using Ghost.SDK;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.Hosting;
+using System.Diagnostics;
+using G = Ghost.Ghost;
 
 namespace {{ project_name }};
 
+/// <summary>
+/// Main program class for service6 service
+/// </summary>
 public class Program
 {
+    /// <summary>
+    /// Application entry point
+    /// </summary>
     public static async Task<int> Main(string[] args)
     {
         try
         {
-            // Create host to support service lifetime
-            using var host = CreateHostBuilder(args).Build();
+            // Set up console handling for graceful shutdown
+            Console.Title = "{{ project_name }}";
+            Console.CancelKeyPress += (s, e) => {
+                e.Cancel = true;
+                Console.WriteLine("Shutdown requested. Please wait...");
+            };
 
-            // Register host with Ghost
-            var app = host.Services.GetRequiredService<ServiceApp>();
+            G.LogInfo("Starting {{ project_name }} service...");
 
-            // Start app but don't block - let host handle lifetime
-            await app.StartAsync();
+            // Create and configure the service
+            var service = new Service6Service();
 
-            // Start host and wait for shutdown
-            await host.RunAsync();
-
-            // Cleanup
-            await app.StopAsync();
+            // Run the service until shutdown is requested
+            await service.ExecuteAsync(args);
 
             return 0;
         }
         catch (Exception ex)
         {
-            await Console.Error.WriteLineAsync($"Fatal error: {ex.Message}");
-            Ghost.LogError(ex, "Service terminated unexpectedly");
+            Console.WriteLine($"Fatal error: {ex.Message}");
             return 1;
         }
-    }
-
-    private static IHostBuilder CreateHostBuilder(string[] args) =>
-        Host.CreateDefaultBuilder(args)
-            .ConfigureAppConfiguration((hostContext, config) =>
-            {
-                confiGhost.AddJsonFile("appsettings.json", optional: false)
-                      .AddJsonFile($"appsettings.{hostContext.HostingEnvironment.EnvironmentName}.json", optional: true)
-                      .AddEnvironmentVariables();
-            })
-            .ConfigureServices((hostContext, services) =>
-            {
-                services.AddSingleton<ServiceApp>();
-                services.AddSingleton<IConfiguration>(hostContext.Configuration);
-
-                // Register background services
-                services.AddHostedService<WorkerService>();
-
-                // Register your services
-                ConfigureServices(services, hostContext.Configuration);
-            });
-
-    private static void ConfigureServices(IServiceCollection services, IConfiguration configuration)
-    {
-        // Register application services here
-        // services.AddSingleton<IMyService, MyService>();
     }
 }
 
 /// <summary>
-/// A long-running Ghost service application
+/// Long-running service application
 /// </summary>
-public class ServiceApp : GhostApp
+[GhostApp(IsService = true, AutoMonitor = true, AutoRestart = true, TickIntervalSeconds = 10)]
+public class Service6Service : GhostServiceApp
 {
     private readonly IConfiguration _configuration;
-    private readonly IServiceProvider _serviceProvider;
-    private readonly CancellationTokenSource _cts = new();
+    private IServiceProvider _serviceProvider;
+    private int _uptimeSeconds = 0;
 
-    public ServiceApp(IServiceProvider serviceProvider, IConfiguration configuration)
+    /// <summary>
+    /// Service constructor
+    /// </summary>
+    public Service6Service() : base()
     {
-        _serviceProvider = serviceProvider;
-        _configuration = configuration;
+        // Build configuration
+        _configuration = new ConfigurationBuilder()
+            .SetBasePath(Directory.GetCurrentDirectory())
+            .AddJsonFile("appsettings.json", optional: false)
+            .AddJsonFile($"appsettings.{Environment.GetEnvironmentVariable("GHOST_ENV") ?? "Development"}.json", optional: true)
+            .AddEnvironmentVariables()
+            .Build();
 
-        // Configure as a service
-        IsService = true;
-        AutoRestart = true;
-        TickInterval = TimeSpan.FromSeconds(5);
-        MaxRestartAttempts = 3;
+        // Register state and error events
+        StateChanged += HandleStateChanged;
+        ErrorOccurred += HandleError;
 
-        Ghost.LogInfo("{{ safe_name }} service initialized");
+        G.LogInfo("service6 service initialized");
     }
 
+    /// <summary>
+    /// Configure services for dependency injection
+    /// </summary>
+    protected override void ConfigureServices()
+    {
+        // Add base services first
+        base.ConfigureServices();
+
+        // Add configuration
+        Services.AddSingleton(_configuration);
+
+        // Register your services here
+        // Services.AddSingleton<IMyBackgroundService, MyBackgroundService>();
+
+        // Build service provider
+        _serviceProvider = Services.BuildServiceProvider();
+    }
+
+    /// <summary>
+    /// Handle service state changes
+    /// </summary>
+    private void HandleStateChanged(object sender, GhostAppState state)
+    {
+        var stateName = state.ToString().ToUpper();
+
+        // Set console color based on state
+        Console.ForegroundColor = state switch {
+            GhostAppState.Running => ConsoleColor.Green,
+            GhostAppState.Stopping => ConsoleColor.Yellow,
+            GhostAppState.Failed => ConsoleColor.Red,
+            _ => ConsoleColor.White
+        };
+
+        Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] Service state: {stateName}");
+        Console.ResetColor();
+    }
+
+    /// <summary>
+    /// Handle service errors
+    /// </summary>
+    private void HandleError(object sender, Exception ex)
+    {
+        Console.ForegroundColor = ConsoleColor.Red;
+        Console.Error.WriteLine($"Service error: {ex.Message}");
+        Console.ResetColor();
+    }
+
+    /// <summary>
+    /// Main service execution
+    /// </summary>
     public override async Task RunAsync(IEnumerable<string> args)
     {
-        Ghost.LogInfo("{{ safe_name }} service running");
+        G.LogInfo("{{ project_name }} service running...");
 
-        // Service runs continuously and processes events via OnTickAsync
+        // Initialize service components
+        await InitializeServiceComponentsAsync();
+
+        // Run the base service implementation which will handle the service loop
+        await base.RunAsync(args);
+    }
+
+    /// <summary>
+    /// Initialize service components
+    /// </summary>
+    private async Task InitializeServiceComponentsAsync()
+    {
+        // Initialize any background tasks or components
         try
         {
-            // Set up initial state, connections, etc.
-            await InitializeCoreComponentsAsync();
+            // TODO: Initialize your service components here
 
-            // Service will remain running until StopAsync is called
-            await Task.Delay(Timeout.Infinite, _cts.Token);
-        }
-        catch (OperationCanceledException)
-        {
-            // Normal shutdown, no need to log
+            // Example: Report startup status
+            var process = Process.GetCurrentProcess();
+            await G.TrackMetricAsync("process.startup.memory", process.WorkingSet64);
+            await G.TrackMetricAsync("process.startup.threads", process.Threads.Count);
+
+            G.LogInfo("Service components initialized successfully");
         }
         catch (Exception ex)
         {
-            Ghost.LogError(ex, "Error in service main loop");
-            throw;
+            G.LogError(ex, "Failed to initialize service components");
+            throw; // Let the framework handle restart
         }
     }
 
-    private async Task InitializeCoreComponentsAsync()
+    /// <summary>
+    /// Service-specific tick processing - called at regular intervals
+    /// </summary>
+    protected override async Task ServiceTickAsync()
     {
-        // Connect to databases, message buses, etc.
-        Ghost.LogInfo("Initializing service components...");
+        // Increment uptime counter
+        _uptimeSeconds += (int)TickInterval.TotalSeconds;
 
-        // Example: Connect to database
-        // var connectionString = _configuration.GetConnectionString("DefaultConnection");
-        // await _database.ConnectAsync(connectionString);
+        // Report basic metrics
+        var process = Process.GetCurrentProcess();
+        await G.TrackMetricAsync("service.uptime.seconds", _uptimeSeconds);
+        await G.TrackMetricAsync("service.memory.mb", process.WorkingSet64 / 1024.0 / 1024.0);
 
-        await Task.CompletedTask;
+        // TODO: Add your periodic service processing here
+        // For example, check queues, process background tasks, etc.
+
+        G.LogDebug($"Service heartbeat - uptime: {TimeSpan.FromSeconds(_uptimeSeconds)}");
     }
 
-    protected override async Task OnTickAsync()
+    /// <summary>
+    /// Clean up resources
+    /// </summary>
+    public override async ValueTask DisposeAsync()
     {
-        // Called periodically based on TickInterval
-        // This is where you implement the periodic work for your service
+        G.LogInfo("Disposing service6 service resources...");
 
-        try
-        {
-            // Example: Process pending messages
-            // await ProcessPendingMessagesAsync();
+        // TODO: Dispose your service resources here
 
-            // Example: Update metrics
-            await Ghost.TrackMetricAsync("service.heartbeat", 1);
-
-            await Task.CompletedTask;
-        }
-        catch (Exception ex)
-        {
-            Ghost.LogError(ex, "Error in service tick");
-            // Don't rethrow - we want the service to keep running
-        }
-    }
-
-    public override async Task StopAsync()
-    {
-        Ghost.LogInfo("{{ safe_name }} service stoppinGhost...");
-
-        // Cancel the main loop
-        _cts.Cancel();
-
-        // Cleanup resources
+        // Dispose the service provider if needed
         if (_serviceProvider is IAsyncDisposable asyncDisposable)
         {
             await asyncDisposable.DisposeAsync();
@@ -161,54 +196,7 @@ public class ServiceApp : GhostApp
             disposable.Dispose();
         }
 
-        _cts.Dispose();
-
-        await base.StopAsync();
-    }
-}
-
-/// <summary>
-/// Background worker for the service
-/// </summary>
-public class WorkerService : BackgroundService
-{
-    private readonly IConfiguration _configuration;
-
-    public WorkerService(IConfiguration configuration)
-    {
-        _configuration = configuration;
-    }
-
-    protected override async Task ExecuteAsync(CancellationToken stoppingToken)
-    {
-        Ghost.LogInfo("Worker service starting");
-
-        while (!stoppingToken.IsCancellationRequested)
-        {
-            try
-            {
-                // Perform background work
-                // await ProcessWorkItemsAsync();
-
-                // Example: track metrics
-                await Ghost.TrackMetricAsync("worker.loop", 1);
-
-                // Wait before next cycle
-                await Task.Delay(TimeSpan.FromSeconds(10), stoppingToken);
-            }
-            catch (OperationCanceledException)
-            {
-                // Normal shutdown
-                break;
-            }
-            catch (Exception ex)
-            {
-                Ghost.LogError(ex, "Error in worker execution");
-                // Wait a bit before retrying after an error
-                await Task.Delay(TimeSpan.FromSeconds(5), stoppingToken);
-            }
-        }
-
-        Ghost.LogInfo("Worker service stopping");
+        // Let base class handle the rest
+        await base.DisposeAsync();
     }
 }

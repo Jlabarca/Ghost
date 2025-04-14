@@ -26,7 +26,7 @@ public class PostgresTransactionWrapper : IGhostTransaction
     }
     catch (Exception ex)
     {
-      G.LogError("Failed to commit PostgreSQL transaction", ex);
+      L.LogError("Failed to commit PostgreSQL transaction", ex);
       throw new GhostException(
           "Failed to commit PostgreSQL transaction",
           ex,
@@ -45,7 +45,7 @@ public class PostgresTransactionWrapper : IGhostTransaction
     }
     catch (Exception ex)
     {
-      G.LogError("Failed to rollback PostgreSQL transaction", ex);
+      L.LogError("Failed to rollback PostgreSQL transaction", ex);
       throw new GhostException(
           "Failed to rollback PostgreSQL transaction",
           ex,
@@ -65,7 +65,7 @@ public class PostgresTransactionWrapper : IGhostTransaction
     }
     catch (Exception ex)
     {
-      G.LogError("Error disposing PostgreSQL transaction", ex);
+      L.LogError("Error disposing PostgreSQL transaction", ex);
       throw;
     }
   }

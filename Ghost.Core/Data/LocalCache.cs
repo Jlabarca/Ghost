@@ -37,9 +37,10 @@ public class LocalCache : ICache
         if (_disposed) throw new ObjectDisposedException(nameof(LocalCache));
 
         // Check memory cache first
-        if (_cache.TryGetValue(key, out var entry) && !entry.IsExpired)
+        if (typeof(T) == typeof(byte[]) && _cache.TryGetValue(key, out var entry) && !entry.IsExpired)
         {
-            return (T)entry.Value;
+            if (entry.Value is byte[] bytes)
+                return (T)(object)bytes;
         }
 
         // Try load from disk

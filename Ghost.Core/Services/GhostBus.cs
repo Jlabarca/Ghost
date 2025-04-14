@@ -1,20 +1,16 @@
 using Ghost.Core.Data;
-using System;
 using System.Collections.Concurrent;
-using System.Collections.Generic;
-using System.Linq;
 using System.Runtime.CompilerServices;
-using System.Text.Json;
 using System.Text.RegularExpressions;
-using System.Threading;
-using System.Threading.Tasks;
 using Ghost.Core.Exceptions;
+using MemoryPack;
 using System.Threading.Channels;
 
 namespace Ghost.Core.Storage
 {
     /// <summary>
     /// Message bus implementation for pub/sub communication using ICache as a backing store
+    /// with MessagePack serialization for improved performance and smaller message size
     /// </summary>
     public class GhostBus : IGhostBus
     {
@@ -22,7 +18,6 @@ namespace Ghost.Core.Storage
         private readonly ConcurrentDictionary<string, CancellationTokenSource> _subscriptions = new();
         private readonly SemaphoreSlim _lock = new(1, 1);
         private readonly ConcurrentDictionary<string, List<Action<string, string>>> _callbacks = new();
-        private readonly TimeSpan _pollInterval = TimeSpan.FromMilliseconds(100);
         private readonly Timer _cleanupTimer;
         private readonly object _lastTopicLock = new();
         private string _lastTopic;
@@ -39,7 +34,7 @@ namespace Ghost.Core.Storage
         }
 
         /// <summary>
-        /// Publish a message to the specified channel
+        /// Publish a message to the specified channel using MessagePack serialization
         /// </summary>
         public async Task PublishAsync<T>(string channel, T message, TimeSpan? expiry = null)
         {
@@ -49,8 +44,8 @@ namespace Ghost.Core.Storage
 
             try
             {
-                // Serialize message
-                string serialized = JsonSerializer.Serialize(message);
+                // Serialize message using MessagePack
+                byte[] serialized = MemoryPackSerializer.Serialize(message);
 
                 // Generate unique message ID (timestamp:guid)
                 string messageId = $"{DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()}:{Guid.NewGuid()}";
@@ -120,32 +115,30 @@ namespace Ghost.Core.Storage
                 // Process new messages as they arrive
                 while (!linkedSource.Token.IsCancellationRequested)
                 {
-
-                        if (await channel.Reader.WaitToReadAsync(linkedSource.Token))
+                    if (await channel.Reader.WaitToReadAsync(linkedSource.Token))
+                    {
+                        while (channel.Reader.TryRead(out var item))
                         {
-                            while (channel.Reader.TryRead(out var item))
+                            var (topic, messageId) = item;
+
+                            // Store the last topic for reference
+                            lock (_lastTopicLock)
                             {
-                                var (topic, messageId) = item;
+                                _lastTopic = topic;
+                            }
 
-                                // Store the last topic for reference
-                                lock (_lastTopicLock)
-                                {
-                                    _lastTopic = topic;
-                                }
+                            // Get the message from cache
+                            string key = $"message:{topic}:{messageId}";
+                            byte[] data = await _cache.GetAsync<byte[]>(key);
 
-
-                                // Get the message from cache
-                                string key = $"message:{topic}:{messageId}";
-                                string json = await _cache.GetAsync<string>(key);
-
-                                if (!string.IsNullOrEmpty(json))
-                                {
-                                    // Deserialize and yield the message
-                                    T message = JsonSerializer.Deserialize<T>(json);
-                                    yield return message;
-                                }
+                            if (data != null && data.Length > 0)
+                            {
+                                // Deserialize and yield the message using MessagePack
+                                T message = MemoryPackSerializer.Deserialize<T>(data);
+                                yield return message;
                             }
                         }
+                    }
                 }
             }
             finally
@@ -189,7 +182,7 @@ namespace Ghost.Core.Storage
             }
             catch (Exception ex)
             {
-                G.LogWarn($"Error processing existing messages for pattern {channelPattern}: {ex.Message}");
+                L.LogWarn($"Error processing existing messages for pattern {channelPattern}: {ex.Message}");
             }
         }
 
@@ -246,7 +239,7 @@ namespace Ghost.Core.Storage
             }
             catch (Exception ex)
             {
-                G.LogWarn($"Message bus unavailable: {ex.Message}");
+                L.LogWarn($"Message bus unavailable: {ex.Message}");
                 return false;
             }
         }
@@ -303,7 +296,7 @@ namespace Ghost.Core.Storage
                         }
                         catch (Exception ex)
                         {
-                            G.LogWarn($"Error in subscription callback for {pattern}: {ex.Message}");
+                            L.LogWarn($"Error in subscription callback for {pattern}: {ex.Message}");
                         }
                     }
                 }
@@ -361,7 +354,7 @@ namespace Ghost.Core.Storage
             }
             catch (Exception ex)
             {
-                G.LogWarn($"Error in cleanup task: {ex.Message}");
+                L.LogWarn($"Error in cleanup task: {ex.Message}");
             }
         }
 

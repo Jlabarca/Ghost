@@ -1,3 +1,4 @@
+using Ghost.Core;
 using Ghost.Core.Data;
 using Ghost.Core.Monitoring;
 using Ghost.Core.Storage;
@@ -104,7 +105,7 @@ public class StateManager
         }
         catch (Exception ex)
         {
-            G.LogError(ex, "Failed to save process state: {Id}", process.Id);
+            L.LogError(ex, "Failed to save process state: {Id}", process.Id);
             throw;
         }
     }
@@ -128,7 +129,7 @@ public class StateManager
         }
         catch (Exception ex)
         {
-            G.LogError(ex, "Failed to update process status: {Id} -> {Status}", processId, status);
+            L.LogError(ex, "Failed to update process status: {Id} -> {Status}", processId, status);
             throw;
         }
     }
@@ -174,7 +175,7 @@ public class StateManager
         }
         catch (Exception ex)
         {
-            G.LogError(ex, "Failed to save process metrics: {Id}", processId);
+            L.LogError(ex, "Failed to save process metrics: {Id}", processId);
             throw;
         }
     }
@@ -208,7 +209,7 @@ public class StateManager
         }
         catch (Exception ex)
         {
-            G.LogError(ex, "Failed to get process metrics: {Id} ({Start} -> {End})", processId, start, end);
+            L.LogError(ex, "Failed to get process metrics: {Id} ({Start} -> {End})", processId, start, end);
             throw;
         }
     }
@@ -228,7 +229,7 @@ public class StateManager
         }
         catch (Exception ex)
         {
-            G.LogError(ex, "Failed to get active processes");
+            L.LogError(ex, "Failed to get active processes");
             throw;
         }
     }
@@ -251,7 +252,7 @@ public class StateManager
         }
         catch (Exception ex)
         {
-            G.LogError(ex, "Failed to get process: {Id}", processId);
+            L.LogError(ex, "Failed to get process: {Id}", processId);
             throw;
         }
     }
@@ -321,7 +322,7 @@ public class StateManager
         }
         catch (Exception ex)
         {
-            G.LogError(ex, "Failed to get process status: {Id}", processId);
+            L.LogError(ex, "Failed to get process status: {Id}", processId);
             throw;
         }
     }
@@ -352,7 +353,7 @@ public class StateManager
         }
         catch (Exception ex)
         {
-            G.LogError(ex, "Failed to persist process state");
+            L.LogError(ex, "Failed to persist process state");
             throw;
         }
     }

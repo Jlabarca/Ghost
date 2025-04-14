@@ -1,10 +1,11 @@
+
+
 using Ghost.Core.Data;
 using Ghost.Core.Logging;
 using Microsoft.Extensions.Logging;
-
 namespace Ghost;
 
-public static partial class Ghost
+public static partial class G
 {
     private static IGhostLogger? _logger;
 
@@ -66,7 +67,7 @@ public static partial class Ghost
         if (_logger == null)
         {
             Console.WriteLine("Ghost logger not initialized. Call Ghost.Initialize() first.");
-            //throw new InvalidOperationException("Ghost logger not initialized. Call Ghost.Initialize() first.");
+            throw new InvalidOperationException("Ghost logger not initialized. Call Ghost.Initialize() first.");
         }
     }
 

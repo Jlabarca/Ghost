@@ -63,22 +63,22 @@ public class TemplateInfo
                 RequiredPackages = info.RequiredPackages;
                 Tags = info.Tags;
 
-                G.LogDebug($"Loaded template info: {Name} ({Description})");
+                L.LogDebug($"Loaded template info: {Name} ({Description})");
             }
             catch (JsonException ex)
             {
-                G.LogError(ex, $"Invalid JSON in template file: {infoPath}");
+                L.LogError(ex, $"Invalid JSON in template file: {infoPath}");
                 throw new InvalidOperationException($"Invalid template configuration: {ex.Message}", ex);
             }
             catch (Exception ex)
             {
-                G.LogError(ex, $"Failed to load template info: {infoPath}");
+                L.LogError(ex, $"Failed to load template info: {infoPath}");
                 throw;
             }
         }
         else
         {
-            G.LogWarn($"Template info file not found: {infoPath}");
+            L.LogWarn($"Template info file not found: {infoPath}");
         }
     }
 

@@ -1,5 +1,7 @@
+using Ghost.Core;
 using Ghost.Core.Exceptions;
 using Ghost.Core.Storage;
+using MemoryPack;
 
 namespace Ghost.Father;
 
@@ -35,7 +37,7 @@ public class CommandProcessor
                 }
                 catch (Exception ex)
                 {
-                    G.LogError(ex, "Error processing command");
+                    L.LogError(ex, "Error processing command");
                 }
             }
         }
@@ -45,7 +47,7 @@ public class CommandProcessor
         }
         catch (Exception ex)
         {
-            G.LogError(ex, "Fatal error in command processor");
+            L.LogError(ex, "Fatal error in command processor");
             throw;
         }
     }
@@ -70,30 +72,27 @@ public class CommandProcessor
             }
 
             // Execute handler
-            G.LogDebug(
+            L.LogDebug(
                 "Processing command {Type} for {Target}",
-                command.CommandType,
-                command.TargetProcessId);
+                command.CommandType, command.TargetProcessId);
 
             await handler(command);
 
             // Send success response
-            await SendResponseAsync(command, true, null);
+            await SendResponseAsync(command, true, null, null);
         }
         catch (Exception ex)
         {
-            G.LogError(
-                ex,
-                "Failed to process command {Type} for {Target}",
-                command.CommandType,
-                command.TargetProcessId);
+            L.LogError(
+                ex, "Failed to process command {Type} for {Target}",
+                command.CommandType, command.TargetProcessId);
 
             // Send error response
-            await SendResponseAsync(command, false, ex.Message);
+            await SendResponseAsync(command, false, ex.Message, null);
         }
     }
 
-    private async Task SendResponseAsync(SystemCommand command, bool success, string error)
+    private async Task SendResponseAsync(SystemCommand command, bool success, string? error, ICommandData? data = null)
     {
         try
         {
@@ -102,7 +101,8 @@ public class CommandProcessor
                 CommandId = command.CommandId,
                 Success = success,
                 Error = error,
-                Timestamp = DateTime.UtcNow
+                Timestamp = DateTime.UtcNow,
+                Data = data
             };
 
             // Send to specific response channel if provided
@@ -111,24 +111,80 @@ public class CommandProcessor
         }
         catch (Exception ex)
         {
-            G.LogError(ex, "Failed to send command response");
+            L.LogError(ex, "Failed to send command response");
         }
+    }
+
+    // Helper method to send process state
+    private Task SendProcessStateResponseAsync(SystemCommand command, bool success, string? error, ProcessState? state)
+    {
+        var data = state != null ? new ProcessStateResponse { State = state } : null;
+        return SendResponseAsync(command, success, error, data);
+    }
+
+    // Helper method to send process list
+
+    public Task SendProcessListResponseAsync(SystemCommand command, bool success, string? error, List<ProcessState>? processes)
+    {
+        var data = processes != null ? new ProcessListResponse { Processes = processes } : null;
+        return SendResponseAsync(command, success, error, data);
+    }
+
+    // Helper method to send string response
+    private Task SendStringResponseAsync(SystemCommand command, bool success, string? error, string? value)
+    {
+        var data = value != null ? new StringResponse { Value = value } : null;
+        return SendResponseAsync(command, success, error, data);
+    }
+
+    // Helper method to send boolean response
+    private Task SendBooleanResponseAsync(SystemCommand command, bool success, string? error, bool value)
+    {
+        return SendResponseAsync(command, success, error, new BooleanResponse { Value = value });
     }
 }
 
-public class SystemCommand
+
+// Define serializable data types for command responses
+[MemoryPackable]
+[MemoryPackUnion(0, typeof(ProcessStateResponse))]
+[MemoryPackUnion(1, typeof(ProcessListResponse))]
+[MemoryPackUnion(2, typeof(StringResponse))]
+[MemoryPackUnion(3, typeof(BooleanResponse))]
+// You can add more data types as needed
+public partial interface ICommandData { }
+
+// Specific response data types
+[MemoryPackable]
+public partial class ProcessStateResponse : ICommandData
 {
-    public string CommandId { get; set; } = "";
-    public string CommandType { get; set; } = "";
-    public string TargetProcessId { get; set; } = "";
-    public Dictionary<string, string> Parameters { get; set; } = new();
+    public ProcessState? State { get; set; }
 }
 
-public class CommandResponse
+[MemoryPackable]
+public partial class ProcessListResponse : ICommandData
+{
+    public List<ProcessState>? Processes { get; set; }
+}
+
+[MemoryPackable]
+public partial class StringResponse : ICommandData
+{
+    public string? Value { get; set; }
+}
+
+[MemoryPackable]
+public partial class BooleanResponse : ICommandData
+{
+    public bool Value { get; set; }
+}
+
+[MemoryPackable]
+public partial class CommandResponse
 {
     public string CommandId { get; set; } = "";
     public bool Success { get; set; }
     public string? Error { get; set; }
     public DateTime Timestamp { get; set; }
-    public object? Data { get; set; }
+    public ICommandData? Data { get; set; }
 }

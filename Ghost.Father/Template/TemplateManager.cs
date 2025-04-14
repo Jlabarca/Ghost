@@ -129,7 +129,7 @@ public class TemplateManager
 
         if (maxIterations == 0)
         {
-            G.LogWarn($"Template processing reached max iterations for input: {input}");
+            L.LogWarn($"Template processing reached max iterations for input: {input}");
         }
 
         return result;

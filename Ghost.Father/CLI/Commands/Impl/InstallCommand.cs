@@ -107,13 +107,13 @@ public class InstallCommand : AsyncCommand<InstallCommand.Settings>
                   await process.WaitForExitAsync();
                   if (process.ExitCode != 0)
                   {
-                    G.LogWarn($"Failed to set executable permissions on {ghostExeName}");
+                    L.LogWarn($"Failed to set executable permissions on {ghostExeName}");
                   }
                 }
               }
               catch (Exception ex)
               {
-                G.LogWarn($"Could not set executable permissions: {ex.Message}");
+                L.LogWarn($"Could not set executable permissions: {ex.Message}");
               }
             }
 
@@ -132,14 +132,14 @@ public class InstallCommand : AsyncCommand<InstallCommand.Settings>
               if (Directory.Exists(path))
               {
                 sourceTemplatesPath = path;
-                G.LogInfo($"Found templates directory: {path}");
+                L.LogInfo($"Found templates directory: {path}");
                 break;
               }
             }
 
             if (sourceTemplatesPath == null)
             {
-              G.LogWarn("Templates directory not found. Skipping template installation.");
+              L.LogWarn("Templates directory not found. Skipping template installation.");
             } else
             {
               // Create target templates directory
@@ -148,7 +148,7 @@ public class InstallCommand : AsyncCommand<InstallCommand.Settings>
 
               // Get all template folders
               var templateFolders = Directory.GetDirectories(sourceTemplatesPath);
-              G.LogInfo($"Found {templateFolders.Length} templates to install");
+              L.LogInfo($"Found {templateFolders.Length} templates to install");
 
               // Copy each template folder
               foreach (var templateFolder in templateFolders)
@@ -182,13 +182,13 @@ public class InstallCommand : AsyncCommand<InstallCommand.Settings>
                     }
                     catch (Exception ex)
                     {
-                      G.LogWarn($"Failed to delete existing template: {ex.Message}");
+                      L.LogWarn($"Failed to delete existing template: {ex.Message}");
                     }
                   }
 
                   // Copy the template folder
                   await CopyDirectoryAsync(templateFolder, targetFolder);
-                  G.LogInfo($"Installed template: {templateName}");
+                  L.LogInfo($"Installed template: {templateName}");
                 }
               }
             }
@@ -254,14 +254,14 @@ public class InstallCommand : AsyncCommand<InstallCommand.Settings>
       var executablePath = Process.GetCurrentProcess().MainModule?.FileName;
       if (executablePath == null)
       {
-        G.LogError("Failed to determine executable path");
+        L.LogError("Failed to determine executable path");
         return false;
       }
 
       var sourceDir = Path.GetDirectoryName(executablePath);
       if (sourceDir == null)
       {
-        G.LogError("Failed to determine source directory");
+        L.LogError("Failed to determine source directory");
         return false;
       }
 
@@ -270,11 +270,11 @@ public class InstallCommand : AsyncCommand<InstallCommand.Settings>
       var solutionDir = FindSolutionDirectory(sourceDir);
       if (solutionDir == null)
       {
-        G.LogError("Could not find solution directory");
+        L.LogError("Could not find solution directory");
         return false;
       }
 
-      G.LogInfo($"Found solution directory: {solutionDir}");
+      L.LogInfo($"Found solution directory: {solutionDir}");
 
       // Find project paths
       var coreProjPath = Path.Combine(solutionDir, "Ghost.Core", "Ghost.Core.csproj");
@@ -282,23 +282,23 @@ public class InstallCommand : AsyncCommand<InstallCommand.Settings>
 
       if (!File.Exists(coreProjPath))
       {
-        G.LogError($"Ghost.Core project not found at: {coreProjPath}");
+        L.LogError($"Ghost.Core project not found at: {coreProjPath}");
         return false;
       }
 
       if (!File.Exists(sdkProjPath))
       {
-        G.LogError($"Ghost.SDK project not found at: {sdkProjPath}");
+        L.LogError($"Ghost.SDK project not found at: {sdkProjPath}");
         return false;
       }
 
-      G.LogInfo($"Found project files: {coreProjPath} and {sdkProjPath}");
+      L.LogInfo($"Found project files: {coreProjPath} and {sdkProjPath}");
 
       // Build Ghost.Core
       ctx.Status("Building Ghost.Core...");
       if (!await BuildProjectAsync(Path.GetDirectoryName(coreProjPath), "Ghost.Core.csproj"))
       {
-        G.LogError("Failed to build Ghost.Core");
+        L.LogError("Failed to build Ghost.Core");
         return false;
       }
 
@@ -306,7 +306,7 @@ public class InstallCommand : AsyncCommand<InstallCommand.Settings>
       ctx.Status("Building Ghost.SDK...");
       if (!await BuildProjectAsync(Path.GetDirectoryName(sdkProjPath), "Ghost.SDK.csproj"))
       {
-        G.LogError("Failed to build Ghost.SDK");
+        L.LogError("Failed to build Ghost.SDK");
         return false;
       }
 
@@ -342,17 +342,17 @@ public class InstallCommand : AsyncCommand<InstallCommand.Settings>
 
       if (coreDllPath == null || !File.Exists(coreDllPath))
       {
-        G.LogError("Ghost.Core.dll not found after build");
+        L.LogError("Ghost.Core.dll not found after build");
         return false;
       }
 
       if (sdkDllPath == null || !File.Exists(sdkDllPath))
       {
-        G.LogError("Ghost.SDK.dll not found after build");
+        L.LogError("Ghost.SDK.dll not found after build");
         return false;
       }
 
-      G.LogInfo($"Found built DLLs: {coreDllPath} and {sdkDllPath}");
+      L.LogInfo($"Found built DLLs: {coreDllPath} and {sdkDllPath}");
 
       // Create dependency analysis file to help troubleshoot dependency issues
       var depsOutputFile = Path.Combine(libsDir, "dependencies.txt");
@@ -465,13 +465,13 @@ public class InstallCommand : AsyncCommand<InstallCommand.Settings>
       // Close the dependencies writer
       depsWriter.Close();
 
-      G.LogInfo($"Successfully built and copied SDK libraries to {libsDir}");
-      G.LogInfo($"Dependency information written to {depsOutputFile}");
+      L.LogInfo($"Successfully built and copied SDK libraries to {libsDir}");
+      L.LogInfo($"Dependency information written to {depsOutputFile}");
       return true;
     }
     catch (Exception ex)
     {
-      G.LogError(ex, "Failed to build SDK libraries");
+      L.LogError(ex, "Failed to build SDK libraries");
       return false;
     }
   }
@@ -504,7 +504,7 @@ public class InstallCommand : AsyncCommand<InstallCommand.Settings>
     }
     catch (Exception ex)
     {
-      G.LogError(ex, $"Error finding DLL {dllName} in {binDir}");
+      L.LogError(ex, $"Error finding DLL {dllName} in {binDir}");
       return null;
     }
   }
@@ -537,7 +537,7 @@ public class InstallCommand : AsyncCommand<InstallCommand.Settings>
     }
 
     // If we can't find the solution directory, try standard paths
-    G.LogWarn("Solution directory not found via traversal. Checking standard paths...");
+    L.LogWarn("Solution directory not found via traversal. Checking standard paths...");
 
     var baseDir = startDir;
 
@@ -589,12 +589,12 @@ public class InstallCommand : AsyncCommand<InstallCommand.Settings>
           CreateNoWindow = true
       };
 
-      G.LogInfo($"Building project: dotnet {psi.Arguments} in {projectDir}");
+      L.LogInfo($"Building project: dotnet {psi.Arguments} in {projectDir}");
 
       var process = Process.Start(psi);
       if (process == null)
       {
-        G.LogError($"Failed to start dotnet build process for {projectDir}");
+        L.LogError($"Failed to start dotnet build process for {projectDir}");
         return false;
       }
 
@@ -605,17 +605,17 @@ public class InstallCommand : AsyncCommand<InstallCommand.Settings>
 
       if (process.ExitCode != 0)
       {
-        G.LogError($"Build failed for {projectDir}: {error}");
-        G.LogError($"Output: {output}");
+        L.LogError($"Build failed for {projectDir}: {error}");
+        L.LogError($"Output: {output}");
         return false;
       }
 
-      G.LogInfo($"Successfully built {projectFile}");
+      L.LogInfo($"Successfully built {projectFile}");
       return true;
     }
     catch (Exception ex)
     {
-      G.LogError(ex, $"Error building project in {projectDir}");
+      L.LogError(ex, $"Error building project in {projectDir}");
       return false;
     }
   }
@@ -796,19 +796,19 @@ public class InstallCommand : AsyncCommand<InstallCommand.Settings>
             success = true;
           } else
           {
-            G.LogError(ex, $"Failed to copy file from {sourcePath} to {targetPath} after {maxRetries} attempts");
+            L.LogError(ex, $"Failed to copy file from {sourcePath} to {targetPath} after {maxRetries} attempts");
             throw;
           }
         } else
         {
           // Wait before retry
           await Task.Delay(1000 * retryCount);
-          G.LogWarn($"Retrying file copy ({retryCount}/{maxRetries}): {Path.GetFileName(targetPath)}");
+          L.LogWarn($"Retrying file copy ({retryCount}/{maxRetries}): {Path.GetFileName(targetPath)}");
         }
       }
       catch (Exception ex)
       {
-        G.LogError(ex, $"Failed to copy file from {sourcePath} to {targetPath}");
+        L.LogError(ex, $"Failed to copy file from {sourcePath} to {targetPath}");
         throw;
       }
     }
@@ -1048,11 +1048,11 @@ private async Task UpdateTemplatesWithDependenciesAsync(string templatesDir, str
 
         if (csprojTemplates.Length == 0)
         {
-            G.LogInfo("No project templates found to update");
+            L.LogInfo("No project templates found to update");
             return;
         }
 
-        G.LogInfo($"Found {csprojTemplates.Length} project templates to update");
+        L.LogInfo($"Found {csprojTemplates.Length} project templates to update");
 
         // Get the list of MS Extensions DLLs in the libs directory
         var msExtensionsDlls = Directory.GetFiles(libsDir, "Microsoft.Extensions.*.dll")
@@ -1114,14 +1114,14 @@ private async Task UpdateTemplatesWithDependenciesAsync(string templatesDir, str
 
             // Write updated content back to the template file
             await File.WriteAllTextAsync(templateFile, content);
-            G.LogInfo($"Updated template: {templateName}");
+            L.LogInfo($"Updated template: {templateName}");
         }
 
-        G.LogInfo("All templates have been updated with dependency information");
+        L.LogInfo("All templates have been updated with dependency information");
     }
     catch (Exception ex)
     {
-        G.LogError(ex, "Failed to update templates with dependency information");
+        L.LogError(ex, "Failed to update templates with dependency information");
     }
 }
 }

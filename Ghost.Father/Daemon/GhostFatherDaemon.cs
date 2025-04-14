@@ -1,7 +1,6 @@
+using Ghost.Core;
 using Ghost.Core.Config;
 using Ghost.Core.Exceptions;
-using Ghost.Core.Monitoring;
-using Ghost.SDK;
 using System.Text.Json;
 
 namespace Ghost.Father.Daemon;
@@ -16,10 +15,10 @@ public class GhostFatherDaemon : GhostApp
   public GhostFatherDaemon(GhostConfig? config = null) : base()
   {
     // Initialize components
-    _healthMonitor = new HealthMonitor(Ghost.Bus);
-    _commandProcessor = new CommandProcessor(Ghost.Bus);
-    _stateManager = new StateManager(Ghost.Data);
-    _processManager = new ProcessManager(config, _healthMonitor, Ghost.Bus, Ghost.Data, _stateManager);
+    _healthMonitor = new HealthMonitor(GhostProcess.Bus);
+    _commandProcessor = new CommandProcessor(GhostProcess.Bus);
+    _stateManager = new StateManager(GhostProcess.Data);
+    _processManager = new ProcessManager(config, _healthMonitor, GhostProcess.Bus, GhostProcess.Data, _stateManager);
 
 
     // Configure the daemon
@@ -32,7 +31,7 @@ public class GhostFatherDaemon : GhostApp
 
   public override async Task RunAsync(IEnumerable<string> args)
   {
-    G.LogInfo("GhostFather starting...");
+    L.LogInfo("GhostFather starting...");
 
     try
     {
@@ -54,11 +53,11 @@ public class GhostFatherDaemon : GhostApp
       // Discover Ghost apps
       //await _processManager.DiscoverGhostAppsAsync();
 
-      G.LogInfo("GhostFather initialized and ready");
+      L.LogInfo("GhostFather initialized and ready");
     }
     catch (Exception ex)
     {
-      G.LogError("Failed to initialize GhostFather", ex);
+      L.LogError("Failed to initialize GhostFather", ex);
       throw;
     }
   }
@@ -77,7 +76,7 @@ public class GhostFatherDaemon : GhostApp
     }
     catch (Exception ex)
     {
-      G.LogError("Error in GhostFather tick", ex);
+      L.LogError("Error in GhostFather tick", ex);
       // Let base class handle restart if needed
       throw;
     }
@@ -85,7 +84,7 @@ public class GhostFatherDaemon : GhostApp
 
   protected override async Task OnBeforeRunAsync()
   {
-    G.LogInfo("GhostFather preparing to start...");
+    L.LogInfo("GhostFather preparing to start...");
 
     // Ensure required directories exist
     Directory.CreateDirectory(Config.GetLogsPath());
@@ -99,7 +98,7 @@ public class GhostFatherDaemon : GhostApp
   {
     try
     {
-      G.LogInfo("GhostFather shutting down...");
+      L.LogInfo("GhostFather shutting down...");
 
       // Stop all processes
       await _processManager.StopAllAsync();
@@ -109,7 +108,7 @@ public class GhostFatherDaemon : GhostApp
     }
     catch (Exception ex)
     {
-      G.LogError("Error during GhostFather shutdown", ex);
+      L.LogError("Error during GhostFather shutdown", ex);
     }
     finally
     {
@@ -143,7 +142,7 @@ public class GhostFatherDaemon : GhostApp
       var force = cmd.Parameters.TryGetValue("force", out var forceStr) &&
                   bool.TryParse(forceStr, out var forceBool) && forceBool;
 
-      G.LogInfo($"Registering process: {registration.Name} ({registration.Id})");
+      L.LogInfo($"Registering process: {registration.Name} ({registration.Id})");
 
       // Check if process already exists
       try
@@ -175,18 +174,16 @@ public class GhostFatherDaemon : GhostApp
     }
     catch (Exception ex)
     {
-      G.LogError(ex, "Failed to register process");
-      await SendCommandResponseAsync(cmd, false, ex.Message);
+      L.LogError(ex, "Failed to register process");
+      await SendCommandResponseAsync(cmd, false, error: ex.Message);
     }
   }
 
   private async Task HandlePingCommandAsync(SystemCommand cmd)
   {
-    await SendCommandResponseAsync(cmd, true, data: new
+    await SendCommandResponseAsync(cmd, true, data: new StringResponse
     {
-        Status = "Running",
-        Timestamp = DateTime.UtcNow,
-        Version = Config.App?.Version ?? "1.0.0"
+        Value = "Pong"
     });
   }
 
@@ -199,7 +196,7 @@ public class GhostFatherDaemon : GhostApp
         throw new ArgumentException("Process ID is required");
       }
 
-      G.LogInfo($"Starting process: {processId}");
+      L.LogInfo($"Starting process: {processId}");
 
       // Start the process
       await _processManager.StartProcessAsync(processId);
@@ -209,8 +206,8 @@ public class GhostFatherDaemon : GhostApp
     }
     catch (Exception ex)
     {
-      G.LogError(ex, "Failed to start process");
-      await SendCommandResponseAsync(cmd, false, ex.Message);
+      L.LogError(ex, "Failed to start process");
+      await SendCommandResponseAsync(cmd, false, error: ex.Message);
     }
   }
 
@@ -223,7 +220,7 @@ public class GhostFatherDaemon : GhostApp
         throw new ArgumentException("Process ID is required");
       }
 
-      G.LogInfo($"Stopping process: {processId}");
+      L.LogInfo($"Stopping process: {processId}");
 
       // Stop the process
       await _processManager.StopProcessAsync(processId);
@@ -233,8 +230,8 @@ public class GhostFatherDaemon : GhostApp
     }
     catch (Exception ex)
     {
-      G.LogError(ex, "Failed to stop process");
-      await SendCommandResponseAsync(cmd, false, ex.Message);
+      L.LogError(ex, "Failed to stop process");
+      await SendCommandResponseAsync(cmd, false, error: ex.Message);
     }
   }
 
@@ -247,7 +244,7 @@ public class GhostFatherDaemon : GhostApp
         throw new ArgumentException("Process ID is required");
       }
 
-      G.LogInfo($"Restarting process: {processId}");
+      L.LogInfo($"Restarting process: {processId}");
 
       // Restart the process (stop then start)
       await _processManager.StopProcessAsync(processId);
@@ -258,8 +255,8 @@ public class GhostFatherDaemon : GhostApp
     }
     catch (Exception ex)
     {
-      G.LogError(ex, "Failed to restart process");
-      await SendCommandResponseAsync(cmd, false, ex.Message);
+      L.LogError(ex, "Failed to restart process");
+      await SendCommandResponseAsync(cmd, false, error: ex.Message);
     }
   }
 
@@ -267,7 +264,7 @@ public class GhostFatherDaemon : GhostApp
   {
     try
     {
-      G.LogInfo("Getting processes status");
+      L.LogInfo("Getting processes status");
 
       // Check if a specific process ID was provided
       if (cmd.Parameters.TryGetValue("processId", out var processId))
@@ -281,20 +278,27 @@ public class GhostFatherDaemon : GhostApp
         }
 
         // Send response with single process status
-        await SendCommandResponseAsync(cmd, true, data: process);
+        await SendCommandResponseAsync(cmd, true, data: new ProcessStateResponse
+        {
+            State = process.GetProcessState()
+        });
       } else
       {
         // Get status of all processes
         var processes = await _processManager.GetAllProcessesAsync();
-
+        // To ProcessState
+        var processStates = processes.Select(p => p.GetProcessState()).ToList();
         // Send response with all processes status
-        await SendCommandResponseAsync(cmd, true, data: processes);
+        await SendCommandResponseAsync(cmd, true, new ProcessListResponse()
+        {
+            Processes = processStates
+        });
       }
     }
     catch (Exception ex)
     {
-      G.LogError(ex, "Failed to get process status");
-      await SendCommandResponseAsync(cmd, false, ex.Message);
+      L.LogError(ex, "Failed to get process status");
+      await SendCommandResponseAsync(cmd, false, error: ex.Message);
     }
   }
 
@@ -309,7 +313,7 @@ public class GhostFatherDaemon : GhostApp
 
       string workingDirectory = cmd.Parameters.GetValueOrDefault("workingDir", Directory.GetCurrentDirectory());
 
-      G.LogInfo($"Running command: {command} in {workingDirectory}");
+      L.LogInfo($"Running command: {command} in {workingDirectory}");
 
       // Optional arguments
       string args = cmd.Parameters.GetValueOrDefault("args", string.Empty);
@@ -319,17 +323,22 @@ public class GhostFatherDaemon : GhostApp
       // Run the command
       var result = await _processManager.RunCommandAsync(command, args, workingDirectory, waitForExit);
 
+      ICommandData data = new StringResponse
+      {
+          Value = result.ToString() //TODO: wtf
+      };
+
       // Send success response with result
-      await SendCommandResponseAsync(cmd, true, data: result);
+      await SendCommandResponseAsync(cmd, true, data: data);
     }
     catch (Exception ex)
     {
-      G.LogError(ex, "Failed to run command");
-      await SendCommandResponseAsync(cmd, false, ex.Message);
+      L.LogError(ex, "Failed to run command");
+      await SendCommandResponseAsync(cmd, false, error: ex.Message);
     }
   }
 
-  private async Task SendCommandResponseAsync(SystemCommand cmd, bool success, string error = null, object data = null)
+  private async Task SendCommandResponseAsync(SystemCommand cmd, bool success, ICommandData data = null, string error = null)
   {
     try
     {
@@ -343,11 +352,11 @@ public class GhostFatherDaemon : GhostApp
       };
 
       var responseChannel = cmd.Parameters.GetValueOrDefault("responseChannel", "ghost:responses");
-      await Ghost.Bus.PublishAsync(responseChannel, response);
+      await GhostProcess.Bus.PublishAsync(responseChannel, response);
     }
     catch (Exception ex)
     {
-      G.LogError("Failed to send command response", ex);
+      L.LogError("Failed to send command response", ex);
     }
   }
 }

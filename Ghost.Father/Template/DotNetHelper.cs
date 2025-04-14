@@ -34,7 +34,7 @@ public static class DotNetHelper
         }
         catch (Exception ex)
         {
-            G.LogError(ex, "Error checking package installation: {Package}", packageName);
+            L.LogError(ex, "Error checking package installation: {Package}", packageName);
             return false;
         }
     }
@@ -71,11 +71,11 @@ public static class DotNetHelper
                     ErrorCode.TemplateError);
             }
 
-            G.LogInfo("Added package {Package} v{Version}", packageName, version);
+            L.LogInfo("Added package {Package} v{Version}", packageName, version);
         }
         catch (Exception ex) when (ex is not GhostException)
         {
-            G.LogError(ex, "Error adding package: {Package}", packageName);
+            L.LogError(ex, "Error adding package: {Package}", packageName);
             throw new GhostException(
                 $"Failed to add package {packageName}", 
                 ex,
@@ -145,7 +145,7 @@ public static class DotNetHelper
         }
         catch (Exception ex) when (ex is not GhostException)
         {
-            G.LogError(ex, "Error creating project: {Project}", projectName);
+            L.LogError(ex, "Error creating project: {Project}", projectName);
             throw new GhostException(
                 $"Failed to create project {projectName}",
                 ex,
@@ -186,7 +186,7 @@ public static class DotNetHelper
         }
         catch (Exception ex) when (ex is not GhostException)
         {
-            G.LogError(ex, "Error building project at: {Path}", projectPath);
+            L.LogError(ex, "Error building project at: {Path}", projectPath);
             throw new GhostException(
                 $"Failed to build project",
                 ex,
@@ -220,7 +220,7 @@ public static class DotNetHelper
         }
         catch (Exception ex)
         {
-            G.LogError(ex, "Error getting package version: {Package}", packageName);
+            L.LogError(ex, "Error getting package version: {Package}", packageName);
             return null;
         }
     }

@@ -1,3 +1,4 @@
+using Ghost.Core;
 using Ghost.Core.Exceptions;
 using Ghost.Core.Storage;
 using Spectre.Console;

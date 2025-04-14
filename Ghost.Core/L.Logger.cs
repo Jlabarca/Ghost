@@ -4,7 +4,7 @@ using Microsoft.Extensions.Logging;
 
 namespace Ghost;
 
-public static partial class G
+public static class L
 {
     private static IGhostLogger? _logger;
 

@@ -37,6 +37,13 @@ public class GhostConfig
     {
         return Path.Combine(App.Id, Core.AppsPath);
     }
+    public string? ToYaml()
+    {
+        var serializer = new SerializerBuilder()
+            .WithNamingConvention(CamelCaseNamingConvention.Instance)
+            .Build();
+        return serializer.Serialize(this);
+    }
 }
 
 public class AppInfo
@@ -46,8 +53,6 @@ public class AppInfo
     public string Description { get; set; }
     public string Version { get; set; }
 }
-
-
 
     /// <summary>
     /// Core configuration settings for Ghost applications

@@ -1,3 +1,4 @@
+using Ghost.Core;
 using Ghost.Core.Storage;
 using Spectre.Console;
 using Spectre.Console.Cli;
@@ -239,21 +240,4 @@ public class RunCommand : AsyncCommand<RunCommand.Settings>
 
         return ghostDir;
     }
-}
-
-public class SystemCommand
-{
-    public string CommandId { get; set; }
-    public string CommandType { get; set; }
-    public string TargetProcessId { get; set; }
-    public DateTime Timestamp { get; set; } = DateTime.UtcNow;
-    public Dictionary<string, string> Parameters { get; set; } = new();
-}
-
-public class CommandResponse
-{
-    public string CommandId { get; set; }
-    public bool Success { get; set; }
-    public string Error { get; set; }
-    public object Data { get; set; }
 }

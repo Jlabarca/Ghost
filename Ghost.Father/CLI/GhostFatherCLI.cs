@@ -22,18 +22,15 @@ namespace Ghost.Father.CLI
     /// </summary>
     public class GhostFatherCLI : GhostApp
     {
-        private readonly CommandApp _app;
-        private readonly TypeRegistrar _registrar;
-        private readonly GhostConfig _config;
+        private CommandApp _app;
+        private TypeRegistrar _registrar;
 
-        /// <summary>
-        /// Initialize a new instance of the CLI
-        /// </summary>
-        /// <param name="config">Optional configuration override</param>
-        public GhostFatherCLI(GhostConfig config = null)
+        public GhostFatherCLI(GhostConfig config) : base(config)
         {
+        }
 
-            _config = config ?? LoadDefaultConfig();
+        public async override Task StartAsync(IEnumerable<string> args = null)
+        {
 
             // Initialize services
             ConfigureServices();
@@ -47,15 +44,17 @@ namespace Ghost.Father.CLI
             // Configure commands
             ConfigureCommands(_app);
 
-            G.LogInfo("GhostFather CLI initialized");
+            L.LogInfo("GhostFather CLI initialized");
+            base.StartAsync(args);
         }
+
 
         /// <summary>
         /// Configure the service collection with all required services
         /// </summary>
         private void ConfigureServices()
         {
-            Services.AddSingleton(_config);
+            Services.AddSingleton(Config);
             Services.AddSingleton<IServiceCollection>(Services);
 
             // Add core services
@@ -85,7 +84,7 @@ namespace Ghost.Father.CLI
         {
             // Configure cache
             var cachePath = Path.Combine(
-                _config.Core.DataPath ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Ghost"),
+                Config.Core.DataPath ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Ghost"),
                 "cache");
 
             Directory.CreateDirectory(cachePath);
@@ -134,7 +133,7 @@ namespace Ghost.Father.CLI
         /// </summary>
         public override async Task RunAsync(IEnumerable<string> args)
         {
-            G.LogDebug($"Running CLI with args: {string.Join(" ", args)}");
+            L.LogDebug($"Running CLI with args: {string.Join(" ", args)}");
 
             try
             {
@@ -146,38 +145,9 @@ namespace Ghost.Father.CLI
             }
             catch (Exception ex)
             {
-                G.LogError(ex, "Error executing command");
+                L.LogError(ex, "Error executing command");
                 throw;
             }
-        }
-
-        /// <summary>
-        /// Load the default configuration
-        /// </summary>
-        private GhostConfig LoadDefaultConfig()
-        {
-            var ghostInstallDir = Environment.GetEnvironmentVariable("GHOST_INSTALL");
-
-            return new GhostConfig
-            {
-                App = new AppInfo
-                {
-                    Id = "ghost-cli",
-                    Name = "Ghost CLI",
-                    Description = "Ghost Command Line Interface",
-                    Version = Assembly.GetExecutingAssembly().GetName().Version.ToString()
-                },
-                Core = new CoreConfig
-                {
-                    Mode = "development",
-                    LogsPath = string.IsNullOrEmpty(ghostInstallDir) ? "logs" : Path.Combine(ghostInstallDir, "logs"),
-                    DataPath = string.IsNullOrEmpty(ghostInstallDir) ? "data" : Path.Combine(ghostInstallDir, "data"),
-                    AppsPath = string.IsNullOrEmpty(ghostInstallDir) ? "ghosts" : Path.Combine(ghostInstallDir, "ghosts"),
-                    HealthCheckInterval = TimeSpan.FromSeconds(30),
-                    MetricsInterval = TimeSpan.FromSeconds(5)
-                },
-                Modules = new Dictionary<string, ModuleConfig>()
-            };
         }
 
         /// <summary>
@@ -218,7 +188,7 @@ namespace Ghost.Father.CLI
             }
 
             // Fall back to default next to executable and create it
-            G.LogWarn($"Templates directory not found. Creating at: {templatePathNext}");
+            L.LogWarn($"Templates directory not found. Creating at: {templatePathNext}");
             Directory.CreateDirectory(templatePathNext);
 
             // Initialize templates
@@ -263,7 +233,7 @@ namespace Ghost.Father.CLI
             }
             catch (Exception ex)
             {
-                G.LogError(ex, "Error executing CLI");
+                L.LogError(ex, "Error executing CLI");
                 return 1;
             }
         }
@@ -275,7 +245,7 @@ namespace Ghost.Father.CLI
         {
             try
             {
-                G.LogDebug("Disposing GhostFatherCLI");
+                L.LogDebug("Disposing GhostFatherCLI");
 
                 switch (Services)
                 {
@@ -292,7 +262,7 @@ namespace Ghost.Father.CLI
             }
             catch (Exception ex)
             {
-                G.LogError(ex, "Error disposing GhostFatherCLI");
+                L.LogError(ex, "Error disposing GhostFatherCLI");
             }
         }
     }

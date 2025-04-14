@@ -1,19 +1,18 @@
+using Ghost.Core;
 using Ghost.Core.Config;
 using Ghost.Core.Data;
 using Ghost.Core.Exceptions;
-using Ghost.Core.Monitoring;
 using Ghost.Core.Modules;
 using Ghost.Core.Storage;
-using Ghost.SDK;
+using MemoryPack;
 using System.Collections.Concurrent;
-using System.Text.Json;
 
 namespace Ghost.Father;
 
 /// <summary>
 /// Main process management system that handles process lifecycle and orchestration
 /// </summary>
-public class ProcessManager : IProcessManager, IAsyncDisposable
+public class ProcessManager : IAsyncDisposable
 {
     private readonly IGhostBus _bus;
     private readonly IGhostData _data;
@@ -36,8 +35,8 @@ public class ProcessManager : IProcessManager, IAsyncDisposable
         IGhostData data,
         StateManager stateManager)
     {
-        _bus = bus;
-        _data = data;
+        _bus = bus ?? throw new ArgumentNullException(nameof(bus));
+        _data = data ?? throw new ArgumentNullException(nameof(data));
         _config = config ?? throw new ArgumentNullException(nameof(config));
         _healthMonitor = healthMonitor ?? throw new ArgumentNullException(nameof(healthMonitor));
         _stateManager = stateManager ?? throw new ArgumentNullException(nameof(stateManager));
@@ -53,7 +52,6 @@ public class ProcessManager : IProcessManager, IAsyncDisposable
             // Initialize schema
             //await _data.InitializeSchemaAsync();
 
-
             // Initialize state manager
             await _stateManager.InitializeAsync();
 
@@ -63,7 +61,7 @@ public class ProcessManager : IProcessManager, IAsyncDisposable
             {
                 _processes[state.Id] = state;
                 await _healthMonitor.RegisterProcessAsync(state);
-                G.LogInfo("Loaded process state: {0} ({1})", state.Id, state.Status);
+                L.LogInfo("Loaded process state: {0} ({1})", state.Id, state.Status);
             }
 
             // Start health monitoring
@@ -72,11 +70,11 @@ public class ProcessManager : IProcessManager, IAsyncDisposable
             // Subscribe to system events
             _ = SubscribeToSystemEventsAsync();
 
-            G.LogInfo("Process manager initialized with {0} processes", _processes.Count);
+            L.LogInfo("Process manager initialized with {0} processes", _processes.Count);
         }
         catch (Exception ex)
         {
-            G.LogError(ex, "Failed to initialize process manager");
+            L.LogError(ex, "Failed to initialize process manager");
             throw;
         }
         finally
@@ -84,7 +82,6 @@ public class ProcessManager : IProcessManager, IAsyncDisposable
             _lock.Release();
         }
     }
-
 
     private async Task SubscribeToSystemEventsAsync()
     {
@@ -98,13 +95,13 @@ public class ProcessManager : IProcessManager, IAsyncDisposable
                 }
                 catch (Exception ex)
                 {
-                    G.LogError(ex, "Error handling system event: {Type}", evt.Type);
+                    L.LogError(ex, "Error handling system event: {Type}", evt.Type);
                 }
             }
         }
         catch (Exception ex)
         {
-            G.LogError(ex, "Fatal error in system event subscription");
+            L.LogError(ex, "Fatal error in system event subscription");
             throw;
         }
     }
@@ -123,7 +120,7 @@ public class ProcessManager : IProcessManager, IAsyncDisposable
                 await HandleProcessCrashAsync(evt.ProcessId);
                 break;
             default:
-                G.LogWarn("Unknown system event type: {Type}", evt.Type);
+                L.LogWarn("Unknown system event type: {Type}", evt.Type);
                 break;
         }
     }
@@ -165,16 +162,13 @@ public class ProcessManager : IProcessManager, IAsyncDisposable
             if (!_processes.TryAdd(process.Id, process))
             {
                 throw new GhostException(
-                    $"Process with ID {process.Id} already exists",
-                    ErrorCode.ProcessError);
+                    $"Process with ID {process.Id} already exists", ErrorCode.ProcessError);
             }
 
             // Save state and register for monitoring
             await _stateManager.SaveProcessAsync(process);
             await _healthMonitor.RegisterProcessAsync(process);
-
-            G.LogInfo("Registered new process: {Id} ({Name})",
-                process.Id, process.Metadata.Name);
+            L.LogInfo("Registered new process: {Id} ({Name})", process.Id, process.Metadata.Name);
 
             return process;
         }
@@ -199,7 +193,7 @@ public class ProcessManager : IProcessManager, IAsyncDisposable
 
             if (process.Status == ProcessStatus.Running)
             {
-                G.LogWarn("Process already running: {Id}", id);
+                L.LogWarn("Process already running: {Id}", id);
                 return;
             }
 
@@ -218,24 +212,19 @@ public class ProcessManager : IProcessManager, IAsyncDisposable
             // Attempt to start with retry logic
             var attempts = 0;
             var lastError = default(Exception);
-
             while (attempts++ < _maxStartAttempts)
             {
                 try
                 {
                     await process.StartAsync();
                     await _stateManager.SaveProcessAsync(process);
-
-                    G.LogInfo("Started process: {Id} (attempt {Attempt}/{Max})",
-                        id, attempts, _maxStartAttempts);
+                    L.LogInfo("Started process: {Id} (attempt {Attempt}/{Max})", id, attempts, _maxStartAttempts);
                     return;
                 }
                 catch (Exception ex)
                 {
                     lastError = ex;
-                    G.LogWarn("Failed to start process: {Id} (attempt {Attempt}/{Max})",
-                        id, attempts, _maxStartAttempts);
-
+                    L.LogWarn("Failed to start process: {Id} (attempt {Attempt}/{Max})", id, attempts, _maxStartAttempts);
                     if (attempts < _maxStartAttempts)
                     {
                         await Task.Delay(TimeSpan.FromSeconds(Math.Pow(2, attempts)));
@@ -269,7 +258,7 @@ public class ProcessManager : IProcessManager, IAsyncDisposable
 
             if (process.Status == ProcessStatus.Stopped)
             {
-                G.LogWarn("Process already stopped: {Id}", id);
+                L.LogWarn("Process already stopped: {Id}", id);
                 return;
             }
 
@@ -278,15 +267,13 @@ public class ProcessManager : IProcessManager, IAsyncDisposable
             {
                 await process.StopAsync(_shutdownTimeout);
                 await _stateManager.SaveProcessAsync(process);
-                G.LogInfo("Stopped process: {Id}", id);
+                L.LogInfo("Stopped process: {Id}", id);
             }
             catch (Exception ex)
             {
-                G.LogError(ex, "Error stopping process: {Id}", id);
+                L.LogError(ex, "Error stopping process: {Id}", id);
                 throw new GhostException(
-                    $"Failed to stop process: {id}",
-                    ex,
-                    ErrorCode.ProcessError);
+                    $"Failed to stop process: {id}", ex, ErrorCode.ProcessError);
             }
         }
         finally
@@ -310,9 +297,7 @@ public class ProcessManager : IProcessManager, IAsyncDisposable
 
             await process.RestartAsync(_shutdownTimeout);
             await _stateManager.SaveProcessAsync(process);
-
-            G.LogInfo("Restarted process: {Id} (restart count: {Count})",
-                id, process.RestartCount);
+            L.LogInfo("Restarted process: {Id} (restart count: {Count})", id, process.RestartCount);
         }
         finally
         {
@@ -343,10 +328,11 @@ public class ProcessManager : IProcessManager, IAsyncDisposable
     {
         try
         {
-            var registration = JsonSerializer.Deserialize<ProcessRegistration>(evt.Data);
+            // Use MemoryPack instead of JsonSerializer
+            var registration = MemoryPackSerializer.Deserialize<ProcessRegistration>(evt.Data);
             if (registration == null)
             {
-                G.LogError("Invalid process registration data");
+                L.LogError("Invalid process registration data");
                 return;
             }
 
@@ -354,7 +340,7 @@ public class ProcessManager : IProcessManager, IAsyncDisposable
         }
         catch (Exception ex)
         {
-            G.LogError(ex, "Failed to handle process registration");
+            L.LogError(ex, "Failed to handle process registration");
         }
     }
 
@@ -364,7 +350,7 @@ public class ProcessManager : IProcessManager, IAsyncDisposable
         {
             await process.StopAsync(TimeSpan.FromSeconds(5));
             await _stateManager.SaveProcessAsync(process);
-            G.LogInfo("Process stopped: {Id}", processId);
+            L.LogInfo("Process stopped: {Id}", processId);
         }
     }
 
@@ -377,15 +363,15 @@ public class ProcessManager : IProcessManager, IAsyncDisposable
 
             // Check auto-restart configuration
             var config = _config.GetModuleConfig<ProcessConfig>($"processes:{processId}");
-            if (config.AutoRestart == true)
+            if (config?.AutoRestart == true)
             {
-                G.LogInfo("Auto-restarting crashed process: {Id}", processId);
+                L.LogInfo("Auto-restarting crashed process: {Id}", processId);
                 await Task.Delay(config.RestartDelayMs);
                 await RestartProcessAsync(processId);
             }
             else
             {
-                G.LogError("Process crashed: {Id}", processId);
+                L.LogError("Process crashed: {Id}", processId);
             }
         }
     }
@@ -393,7 +379,6 @@ public class ProcessManager : IProcessManager, IAsyncDisposable
     public async ValueTask DisposeAsync()
     {
         if (_disposed) return;
-
         await _lock.WaitAsync();
         try
         {
@@ -410,14 +395,13 @@ public class ProcessManager : IProcessManager, IAsyncDisposable
             }
             catch (Exception ex)
             {
-                G.LogError(ex, "Errors occurred while stopping processes during shutdown");
+                L.LogError(ex, "Errors occurred while stopping processes during shutdown");
             }
 
             _processes.Clear();
             _lock.Dispose();
             _disposed = true;
-
-            G.LogInfo("Process manager disposed");
+            L.LogInfo("Process manager disposed");
         }
         finally
         {
@@ -427,10 +411,12 @@ public class ProcessManager : IProcessManager, IAsyncDisposable
             }
         }
     }
+
     public async Task<object> GetProcessStatusAsync(string? processId)
     {
         return await _stateManager.GetProcessStatusAsync(processId);
     }
+
     public async Task StopAllAsync()
     {
         var runningProcesses = _processes.Values
@@ -443,6 +429,7 @@ public class ProcessManager : IProcessManager, IAsyncDisposable
             await _stateManager.SaveProcessAsync(process);
         }
     }
+
     public async Task MaintenanceTickAsync()
     {
         await _lock.WaitAsync();
@@ -458,15 +445,13 @@ public class ProcessManager : IProcessManager, IAsyncDisposable
                 // so here we try to take action based on the health of the process
                 switch (process.Status)
                 {
-
                     case ProcessStatus.Starting:
                     case ProcessStatus.Running:
                         continue;
                     case ProcessStatus.Stopping:
                     case ProcessStatus.Stopped:
-                        G.LogDebug("Process is healthy: {Id} ({Name})", process.Id, process.Metadata.Name);
+                        L.LogDebug("Process is healthy: {Id} ({Name})", process.Id, process.Metadata.Name);
                         continue;
-
                     case ProcessStatus.Failed:
                     case ProcessStatus.Crashed:
                     case ProcessStatus.Warning:
@@ -475,8 +460,7 @@ public class ProcessManager : IProcessManager, IAsyncDisposable
                         throw new ArgumentOutOfRangeException();
                 }
 
-                G.LogWarn("Process is unhealthy: {Id} ({Name})", process.Id, process.Metadata.Name);
-
+                L.LogWarn("Process is unhealthy: {Id} ({Name})", process.Id, process.Metadata.Name);
                 // Attempt to restart process
                 await process.RestartAsync(_shutdownTimeout);
                 await _stateManager.SaveProcessAsync(process);
@@ -484,13 +468,14 @@ public class ProcessManager : IProcessManager, IAsyncDisposable
         }
         catch (Exception ex)
         {
-            G.LogError(ex, "Error during maintenance tick");
+            L.LogError(ex, "Error during maintenance tick");
         }
         finally
         {
             _lock.Release();
         }
     }
+
     public async Task<List<ProcessInfo>> GetAllProcessesAsync()
     {
         await _lock.WaitAsync();
@@ -503,6 +488,7 @@ public class ProcessManager : IProcessManager, IAsyncDisposable
             _lock.Release();
         }
     }
+
     public async Task<object> RunCommandAsync(string command, string args, string workingDirectory, bool waitForExit)
     {
         await _lock.WaitAsync();
@@ -535,45 +521,10 @@ public class ProcessManager : IProcessManager, IAsyncDisposable
 /// <summary>
 /// Process configuration model
 /// </summary>
-public class ProcessConfig : ModuleConfig
+[MemoryPackable]
+public partial class ProcessConfig : ModuleConfig
 {
     public bool AutoRestart { get; set; } = true;
     public int RestartDelayMs { get; set; } = 5000;
     public Dictionary<string, string> Environment { get; set; } = new();
-}
-
-/// <summary>
-/// Process registration model
-/// </summary>
-
-
-/// <summary>
-/// System event model
-/// </summary>
-public class SystemEvent
-{
-    public string Type { get; set; }
-    public string ProcessId { get; set; }
-    public string Data { get; set; }
-    public DateTime Timestamp { get; set; } = DateTime.UtcNow;
-
-    public T GetData<T>() where T : class
-    {
-        if (string.IsNullOrEmpty(Data)) return null;
-        return JsonSerializer.Deserialize<T>(Data);
-    }
-}
-
-/// <summary>
-/// Process management interface
-/// </summary>
-public interface IProcessManager
-{
-    Task InitializeAsync();
-    Task<ProcessInfo> RegisterProcessAsync(ProcessRegistration registration);
-    Task StartProcessAsync(string id);
-    Task StopProcessAsync(string id);
-    Task RestartProcessAsync(string id);
-    Task<ProcessInfo> GetProcessAsync(string id);
-    IEnumerable<ProcessInfo> GetAllProcesses();
 }

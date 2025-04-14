@@ -1,5 +1,4 @@
-using Ghost.Core.Monitoring;
-using Ghost.Core.Monitoring;
+using Ghost.Core;
 using Ghost.Core.Storage;
 using Ghost.Father.Models;
 using System.Collections.Concurrent;
@@ -85,7 +84,7 @@ public class HealthMonitor : IAsyncDisposable
             process.OutputReceived += OnProcessOutputReceived;
             process.ErrorReceived += OnProcessErrorReceived;
 
-            G.LogInfo("Started monitoring process: {Id} ({Name})",
+            L.LogInfo("Started monitoring process: {Id} ({Name})",
                 process.Id, process.Metadata.Name);
         }
         finally
@@ -108,21 +107,21 @@ public class HealthMonitor : IAsyncDisposable
                 : 0;
 
             return new ProcessMetrics(
-                processId: process.Id,
-                cpuPercentage: Math.Round(cpuUsage, 2),
-                memoryBytes: Process.GetCurrentProcess().WorkingSet64,
-                threadCount: Process.GetCurrentProcess().Threads.Count,
-                timestamp: DateTime.UtcNow,
-                handleCount: Process.GetCurrentProcess().HandleCount,
-                gcTotalMemory: GC.GetTotalMemory(false),
-                gen0Collections: GC.CollectionCount(0),
-                gen1Collections: GC.CollectionCount(1),
-                gen2Collections: GC.CollectionCount(2)
+                ProcessId: process.Id,
+                CpuPercentage: Math.Round(cpuUsage, 2),
+                MemoryBytes: Process.GetCurrentProcess().WorkingSet64,
+                ThreadCount: Process.GetCurrentProcess().Threads.Count,
+                Timestamp: DateTime.UtcNow,
+                HandleCount: Process.GetCurrentProcess().HandleCount,
+                GcTotalMemory: GC.GetTotalMemory(false),
+                Gen0Collections: GC.CollectionCount(0),
+                Gen1Collections: GC.CollectionCount(1),
+                Gen2Collections: GC.CollectionCount(2)
             );
         }
         catch (Exception ex)
         {
-            G.LogError(ex, "Failed to collect metrics for process: {Id}", process.Id);
+            L.LogError(ex, "Failed to collect metrics for process: {Id}", process.Id);
             return ProcessMetrics.CreateSnapshot(process.Id);
         }
     }
@@ -142,7 +141,7 @@ public class HealthMonitor : IAsyncDisposable
                 }
                 catch (Exception ex)
                 {
-                    G.LogError(ex, "Error checking health for process: {Id}",
+                    L.LogError(ex, "Error checking health for process: {Id}",
                         healthState.ProcessInfo.Id);
                 }
             }
@@ -186,7 +185,7 @@ public class HealthMonitor : IAsyncDisposable
         // Handle warnings
         if (warnings.Any())
         {
-            G.LogWarn("Process {Id} health warnings: {Warnings}",
+            L.LogWarn("Process {Id} health warnings: {Warnings}",
                 process.Id, string.Join("; ", warnings));
 
             // Consider restarting if resource usage is extreme
@@ -222,12 +221,12 @@ public class HealthMonitor : IAsyncDisposable
             state.LastRestart = DateTime.UtcNow;
             state.RestartAttempts++;
 
-            G.LogWarn("Restarted process {Id} due to resource usage (attempt {Attempt}/{Max})",
+            L.LogWarn("Restarted process {Id} due to resource usage (attempt {Attempt}/{Max})",
                 state.ProcessInfo.Id, state.RestartAttempts, _maxRestartAttempts);
         }
         catch (Exception ex)
         {
-            G.LogError(ex, "Failed to restart process: {Id}", state.ProcessInfo.Id);
+            L.LogError(ex, "Failed to restart process: {Id}", state.ProcessInfo.Id);
         }
     }
 
@@ -270,7 +269,7 @@ public class HealthMonitor : IAsyncDisposable
         }
         catch (Exception ex)
         {
-            G.LogError(ex, "Failed to publish health update for process: {Id}",
+            L.LogError(ex, "Failed to publish health update for process: {Id}",
                 state.ProcessInfo.Id);
         }
     }
@@ -317,7 +316,7 @@ public class HealthMonitor : IAsyncDisposable
                 }
                 catch (Exception ex)
                 {
-                    G.LogError(ex, "Error checking health for process: {Id}",
+                    L.LogError(ex, "Error checking health for process: {Id}",
                         healthState.ProcessInfo.Id);
                 }
             }

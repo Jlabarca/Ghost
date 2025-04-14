@@ -58,7 +58,7 @@ public class AutoMonitor : IAutoMonitor
 
             // Start the timer
             _metricsTimer.Change(TimeSpan.Zero, _interval);
-            G.LogDebug($"AutoMonitor started for {_appName} ({_appId}) with interval {_interval.TotalSeconds}s");
+            L.LogDebug($"AutoMonitor started for {_appName} ({_appId}) with interval {_interval.TotalSeconds}s");
         }
         finally
         {
@@ -75,7 +75,7 @@ public class AutoMonitor : IAutoMonitor
             if (!_isRunning) return;
             _isRunning = false;
             await _metricsTimer.DisposeAsync();
-            G.LogDebug($"AutoMonitor stopped for {_appName} ({_appId})");
+            L.LogDebug($"AutoMonitor stopped for {_appName} ({_appId})");
         }
         finally
         {
@@ -102,7 +102,7 @@ public class AutoMonitor : IAutoMonitor
         }
         catch (Exception ex)
         {
-            G.LogError(ex, $"Failed to track event {eventName}");
+            L.LogError(ex, $"Failed to track event {eventName}");
         }
     }
 
@@ -140,7 +140,7 @@ public class AutoMonitor : IAutoMonitor
         }
         catch (Exception ex)
         {
-            G.LogError(ex, "Error collecting or sending metrics");
+            L.LogError(ex, "Error collecting or sending metrics");
         }
     }
 
@@ -154,7 +154,7 @@ public class AutoMonitor : IAutoMonitor
         if (_isRunning)
         {
             _metricsTimer.Change(interval, interval);
-            G.LogDebug($"AutoMonitor interval updated to {interval.TotalSeconds}s");
+            L.LogDebug($"AutoMonitor interval updated to {interval.TotalSeconds}s");
         }
     }
 
@@ -165,7 +165,7 @@ public class AutoMonitor : IAutoMonitor
         if (provider == null) throw new ArgumentNullException(nameof(provider));
 
         _customMetricsProviders.Add(provider);
-        G.LogDebug("Custom metrics provider registered");
+        L.LogDebug("Custom metrics provider registered");
     }
 
     private async Task CollectAndSendMetricsAsync()
@@ -190,7 +190,7 @@ public class AutoMonitor : IAutoMonitor
                 }
                 catch (Exception ex)
                 {
-                    G.LogError(ex, "Error collecting custom metrics");
+                    L.LogError(ex, "Error collecting custom metrics");
                 }
             }
 
@@ -207,7 +207,7 @@ public class AutoMonitor : IAutoMonitor
         }
         catch (Exception ex)
         {
-            G.LogError(ex, "Error collecting or sending metrics");
+            L.LogError(ex, "Error collecting or sending metrics");
         }
     }
 
@@ -255,7 +255,7 @@ public class AutoMonitor : IAutoMonitor
         }
         catch (Exception ex)
         {
-            G.LogError(ex, "Error calculating CPU usage");
+            L.LogError(ex, "Error calculating CPU usage");
         }
     }
 
@@ -276,7 +276,7 @@ public class AutoMonitor : IAutoMonitor
             _cts.Dispose();
             _lock.Dispose();
 
-            G.LogDebug($"AutoMonitor disposed for {_appName} ({_appId})");
+            L.LogDebug($"AutoMonitor disposed for {_appName} ({_appId})");
         }
         finally
         {

@@ -53,7 +53,7 @@ public static partial class GhostFather
         }
         catch (Exception ex)
         {
-            G.LogCritical("Fatal error in GhostFatherDaemon", ex);
+            L.LogCritical("Fatal error in GhostFatherDaemon", ex);
             Environment.Exit(1);
         }
     }

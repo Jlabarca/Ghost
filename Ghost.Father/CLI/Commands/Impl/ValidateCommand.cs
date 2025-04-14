@@ -1,7 +1,7 @@
+using Ghost.Core;
 using Ghost.Core.Storage;
 using Ghost.Core.Monitoring;
 using Ghost.Core.Data;
-using Ghost.SDK;
 using Microsoft.Extensions.DependencyInjection;
 using Spectre.Console;
 using Spectre.Console.Cli;
@@ -43,8 +43,8 @@ public class ValidateCommand : AsyncCommand<ValidateCommand.Settings>
 
     if (settings.Verbose)
     {
-      G.LogInfo("Starting Ghost validation with verbose output");
-      G.LogInfo("Validation will check: Commands, Installation, Environment, Integration" +
+      L.LogInfo("Starting Ghost validation with verbose output");
+      L.LogInfo("Validation will check: Commands, Installation, Environment, Integration" +
                 (settings.RunTests ? ", and Tests" : ""));
     }
 
@@ -54,21 +54,21 @@ public class ValidateCommand : AsyncCommand<ValidateCommand.Settings>
         .StartAsync("Validating Ghost installation...", async ctx =>
         {
           // Command validation
-          if (settings.Verbose) G.LogInfo("Starting command validation...");
+          if (settings.Verbose) L.LogInfo("Starting command validation...");
           ctx.Status("Validating commands...");
           ctx.Spinner(Spinner.Known.Arrow3);
 
           hasErrors |= !await ValidateCommandsAsync(settings);
 
           // Installation validation
-          if (settings.Verbose) G.LogInfo("Starting installation validation...");
+          if (settings.Verbose) L.LogInfo("Starting installation validation...");
           ctx.Status("Checking installation state...");
           ctx.Spinner(Spinner.Known.Dots);
 
           hasErrors |= !await ValidateInstallationAsync(settings);
 
           // Environment validation
-          if (settings.Verbose) G.LogInfo("Starting environment validation...");
+          if (settings.Verbose) L.LogInfo("Starting environment validation...");
           ctx.Status("Validating environment...");
           ctx.Spinner(Spinner.Known.Clock);
 
@@ -77,7 +77,7 @@ public class ValidateCommand : AsyncCommand<ValidateCommand.Settings>
           // Integration validation
           if (settings.Verbose)
           {
-            G.LogInfo("Starting integration tests...");
+            L.LogInfo("Starting integration tests...");
             ctx.Status("Testing Ghost integration...");
             ctx.Spinner(Spinner.Known.Bounce);
 
@@ -87,7 +87,7 @@ public class ValidateCommand : AsyncCommand<ValidateCommand.Settings>
           // Run unit tests if requested
           if (settings.RunTests)
           {
-            if (settings.Verbose) G.LogInfo("Starting unit tests...");
+            if (settings.Verbose) L.LogInfo("Starting unit tests...");
             ctx.Status("Running unit tests...");
             ctx.Spinner(Spinner.Known.Star);
 
@@ -97,7 +97,7 @@ public class ValidateCommand : AsyncCommand<ValidateCommand.Settings>
 
     if (settings.Verbose)
     {
-      G.LogInfo($"Validation completed with {(hasErrors ? "errors" : "success")}");
+      L.LogInfo($"Validation completed with {(hasErrors ? "errors" : "success")}");
     }
 
     return hasErrors ? 1 : 0;
@@ -120,14 +120,14 @@ public class ValidateCommand : AsyncCommand<ValidateCommand.Settings>
     var commandValidator = new CommandValidator(_services, _bus);
 
     // Register all commands from registry
-    if (settings.Verbose) G.LogInfo("Registering commands from registry...");
+    if (settings.Verbose) L.LogInfo("Registering commands from registry...");
     CommandRegistry.RegisterWithValidator(commandValidator);
 
-    if (settings.Verbose) G.LogInfo("Validating command configurations...");
+    if (settings.Verbose) L.LogInfo("Validating command configurations...");
     var cmdResults = commandValidator.ValidateCommands();
 
     // Add registry-specific validation
-    if (settings.Verbose) G.LogInfo("Performing registry-specific validation...");
+    if (settings.Verbose) L.LogInfo("Performing registry-specific validation...");
     var regResults = ValidateCommandRegistry();
 
     // Process results
@@ -266,7 +266,7 @@ public class ValidateCommand : AsyncCommand<ValidateCommand.Settings>
 
     if (settings.Verbose)
     {
-      G.LogInfo($"Checking installation at: {installRoot}");
+      L.LogInfo($"Checking installation at: {installRoot}");
     }
 
     // Check installation directories

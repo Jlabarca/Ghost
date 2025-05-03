@@ -9,4 +9,5 @@ public partial class SystemCommand
   public string TargetProcessId { get; set; } = "";
   public DateTime Timestamp { get; set; } = DateTime.UtcNow;
   public Dictionary<string, string> Parameters { get; set; } = new();
+  public string Data { get; set; } = ""; // For MemoryPack serialized data (Base64 encoded)
 }

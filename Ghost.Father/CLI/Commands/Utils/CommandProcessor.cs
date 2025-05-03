@@ -1,7 +1,6 @@
 using Ghost.Core;
 using Ghost.Core.Exceptions;
 using Ghost.Core.Storage;
-using MemoryPack;
 
 namespace Ghost.Father;
 
@@ -144,47 +143,3 @@ public class CommandProcessor
     }
 }
 
-
-// Define serializable data types for command responses
-[MemoryPackable]
-[MemoryPackUnion(0, typeof(ProcessStateResponse))]
-[MemoryPackUnion(1, typeof(ProcessListResponse))]
-[MemoryPackUnion(2, typeof(StringResponse))]
-[MemoryPackUnion(3, typeof(BooleanResponse))]
-// You can add more data types as needed
-public partial interface ICommandData { }
-
-// Specific response data types
-[MemoryPackable]
-public partial class ProcessStateResponse : ICommandData
-{
-    public ProcessState? State { get; set; }
-}
-
-[MemoryPackable]
-public partial class ProcessListResponse : ICommandData
-{
-    public List<ProcessState>? Processes { get; set; }
-}
-
-[MemoryPackable]
-public partial class StringResponse : ICommandData
-{
-    public string? Value { get; set; }
-}
-
-[MemoryPackable]
-public partial class BooleanResponse : ICommandData
-{
-    public bool Value { get; set; }
-}
-
-[MemoryPackable]
-public partial class CommandResponse
-{
-    public string CommandId { get; set; } = "";
-    public bool Success { get; set; }
-    public string? Error { get; set; }
-    public DateTime Timestamp { get; set; }
-    public ICommandData? Data { get; set; }
-}

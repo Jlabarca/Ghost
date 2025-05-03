@@ -30,6 +30,19 @@ public class DefaultGhostLogger : IGhostLogger
         { LogLevel.Critical, "CRIT" }
     };
 
+    /// <summary>
+    /// Dictionary mapping log levels to their console colors
+    /// </summary>
+    protected static readonly Dictionary<LogLevel, ConsoleColor> LogLevelColors = new()
+    {
+        { LogLevel.Trace, ConsoleColor.Gray },
+        { LogLevel.Debug, ConsoleColor.Cyan },
+        { LogLevel.Information, ConsoleColor.Green },
+        { LogLevel.Warning, ConsoleColor.Yellow },
+        { LogLevel.Error, ConsoleColor.Red },
+        { LogLevel.Critical, ConsoleColor.DarkRed }
+    };
+
     public DefaultGhostLogger(ICache cache, GhostLoggerConfiguration config)
     {
         _cache = cache;
@@ -139,39 +152,108 @@ public class DefaultGhostLogger : IGhostLogger
     }
 
     /// <summary>
-    /// Logs a message to the console with basic formatting
+    /// Logs a message to the console with color formatting
     /// </summary>
     protected virtual void LogToConsole(LogEntry entry)
     {
-        var timestamp = entry.Timestamp.ToString("HH:mm:ss.fff");
-        var levelName = LogLevelNames.GetValueOrDefault(entry.Level, "UNKNOWN");
-        var logMessage = $"{timestamp} [{levelName}] {entry.Message}";
-
-        // Add source location if available and configured
-        if (_config.ShowSourceLocation && !string.IsNullOrEmpty(entry.SourceFilePath))
+        var originalColor = Console.ForegroundColor;
+        try
         {
-            string fileName = Path.GetFileName(entry.SourceFilePath);
-            logMessage += $" [{fileName}:{entry.SourceLineNumber}]";
-        }
+            var timestamp = entry.Timestamp.ToString("HH:mm:ss.fff");
+            var levelName = LogLevelNames.GetValueOrDefault(entry.Level, "UNKNOWN");
 
-        // Simple console output without colors
-        Console.WriteLine(logMessage);
+            // Set color based on log level
+            Console.ForegroundColor = LogLevelColors.GetValueOrDefault(entry.Level, ConsoleColor.White);
+
+            // Format source location in a way that IDEs can recognize
+            string sourceInfo = "";
+            if (_config.ShowSourceLocation && !string.IsNullOrEmpty(entry.SourceFilePath))
+            {
+                string fileName = Path.GetFileName(entry.SourceFilePath);
+                // Format: filename:lineNumber
+                sourceInfo = $"[{fileName}:{entry.SourceLineNumber}]";
+            }
+
+            Console.WriteLine($"{timestamp} [{levelName}] {entry.Message} {sourceInfo}");
+        }
+        finally
+        {
+            // Restore original color
+            Console.ForegroundColor = originalColor;
+        }
     }
 
     /// <summary>
-    /// Logs an exception to the console
+    /// Logs an exception to the console with IDE-friendly formatting
     /// </summary>
     protected virtual void LogExceptionToConsole(Exception exception)
     {
-        Console.WriteLine();
-        Console.WriteLine($"Exception: {exception.GetType().Name}");
-        Console.WriteLine($"Message: {exception.Message}");
-        Console.WriteLine($"StackTrace: {exception.StackTrace}");
-        if (exception.InnerException != null)
+        var originalColor = Console.ForegroundColor;
+        try
         {
-            Console.WriteLine($"Inner exception: {exception.InnerException.Message}");
+            Console.ForegroundColor = ConsoleColor.Red;
+            Console.WriteLine();
+            Console.WriteLine($"Exception: {exception.GetType().Name}");
+            Console.WriteLine($"Message: {exception.Message}");
+
+            // Print stack trace with IDE-clickable format
+            if (exception.StackTrace != null)
+            {
+                Console.WriteLine("Stack trace:");
+                string[] stackTraceLines = exception.StackTrace.Split('\n');
+                foreach (var line in stackTraceLines)
+                {
+                    FormatStackTraceLine(line.Trim());
+                }
+            }
+
+            if (exception.InnerException != null)
+            {
+                Console.ForegroundColor = ConsoleColor.DarkRed;
+                Console.WriteLine($"Inner exception: {exception.InnerException.Message}");
+                if (exception.InnerException.StackTrace != null)
+                {
+                    string[] stackTraceLines = exception.InnerException.StackTrace.Split('\n');
+                    foreach (var line in stackTraceLines)
+                    {
+                        FormatStackTraceLine(line.Trim());
+                    }
+                }
+            }
+            Console.WriteLine();
         }
-        Console.WriteLine();
+        finally
+        {
+            Console.ForegroundColor = originalColor;
+        }
+    }
+
+    /// <summary>
+    /// Formats a stack trace line to be IDE-clickable
+    /// </summary>
+    private void FormatStackTraceLine(string line)
+    {
+        var originalColor = Console.ForegroundColor;
+        try
+        {
+            // For VS Code & Rider, use format that makes line numbers clickable
+            // Format: "at Method() in /path/to/file.cs:line"
+            if (line.Contains(" in "))
+            {
+                string[] parts = line.Split(new[] { " in " }, StringSplitOptions.None);
+                Console.Write($"  {parts[0]} in ");
+                Console.ForegroundColor = ConsoleColor.Cyan;
+                Console.WriteLine(parts[1]);
+            }
+            else
+            {
+                Console.WriteLine($"  {line}");
+            }
+        }
+        finally
+        {
+            Console.ForegroundColor = originalColor;
+        }
     }
 
     private interface ILogState

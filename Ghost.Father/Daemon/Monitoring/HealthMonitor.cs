@@ -84,8 +84,7 @@ public class HealthMonitor : IAsyncDisposable
             process.OutputReceived += OnProcessOutputReceived;
             process.ErrorReceived += OnProcessErrorReceived;
 
-            L.LogInfo("Started monitoring process: {Id} ({Name})",
-                process.Id, process.Metadata.Name);
+            L.LogInfo($"Started monitoring process: {process.Id} ({process.Metadata.Name})");
         }
         finally
         {

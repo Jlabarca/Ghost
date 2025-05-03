@@ -48,7 +48,7 @@ public class App : GhostApp
         ConfigureServices(services);
         _serviceProvider = services.BuildServiceProvider();
 
-        Petter.LogInfo("{{ safe_name }} initialized");
+        G.LogInfo("{{ safe_name }} initialized");
     }
 
     protected virtual void ConfigureServices(IServiceCollection services)
@@ -62,7 +62,7 @@ public class App : GhostApp
 
     public override async Task RunAsync(IEnumerable<string> args)
     {
-        Petter.LogInfo("{{ safe_name }} starting...");
+        G.LogInfo("{{ safe_name }} starting...");
 
         try
         {
@@ -84,11 +84,11 @@ public class App : GhostApp
                 }
             }
 
-            Petter.LogInfo("{{ safe_name }} completed successfully.");
+            G.LogInfo("{{ safe_name }} completed successfully.");
         }
         catch (Exception ex)
         {
-            Petter.LogError(ex, "Error executing {{ safe_name }}");
+            G.LogError(ex, "Error executing {{ safe_name }}");
             throw;
         }
     }
@@ -106,7 +106,7 @@ public class App : GhostApp
 
     private async Task ProcessFileAsync(string filePath)
     {
-        Petter.LogInfo($"Processing file: {filePath}");
+        G.LogInfo($"Processing file: {filePath}");
         // Implement your file processing logic here
         await Task.Delay(100); // Placeholder for actual processing
     }
@@ -114,7 +114,7 @@ public class App : GhostApp
     // Not called for one-shot apps, but good to implement for cleanup
     public override async Task StopAsync()
     {
-        Petter.LogInfo("{{ safe_name }} shutting down...");
+        G.LogInfo("{{ safe_name }} shutting down...");
 
         // Cleanup resources if needed
         if (_serviceProvider is IAsyncDisposable asyncDisposable)

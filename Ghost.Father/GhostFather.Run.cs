@@ -4,7 +4,7 @@ using Ghost.Father.Daemon;
 
 namespace Ghost;
 
-public static partial class GhostFather
+public static class GhostFather
 {
     public static async Task Run(string[] args)
     {
@@ -28,8 +28,9 @@ public static partial class GhostFather
             var config = CreateConfigFromArgs(args);
 
             // Create and run daemon
-            var daemon = new GhostFatherDaemon(config);
-            await daemon.RunAsync(args);
+            var daemon = new GhostFatherDaemon();
+            daemon.Execute(args, config);
+            //await daemon.RunAsync(args);
 
             // Wait for shutdown signal
             var cts = new CancellationTokenSource();
@@ -44,7 +45,7 @@ public static partial class GhostFather
             }
             catch (OperationCanceledException)
             {
-                // Normal shutdown
+                L.LogInfo("GhostFatherDaemon shutting down...");
             }
             finally
             {
@@ -78,8 +79,8 @@ public static partial class GhostFather
         };
 
         // Create and run CLI
-        var cli = new GhostFatherCLI(config);
-        await cli.RunAsync(args); //TODO: pass args and config
+        var cli = new GhostFatherCLI();
+        cli.Execute(args, config);
     }
 
     private static GhostConfig CreateConfigFromArgs(string[] args)

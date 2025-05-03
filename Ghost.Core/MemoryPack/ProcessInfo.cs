@@ -482,7 +482,8 @@ public partial class ProcessInfo : IAsyncDisposable
       StartTime = StartTime,
       EndTime = StopTime,
       LastMetrics = null, // Placeholder for metrics if needed
-      LastSeen = DateTime.UtcNow
+      LastSeen = DateTime.UtcNow,
+      Status = Status
     };
   }
 }

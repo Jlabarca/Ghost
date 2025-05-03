@@ -24,8 +24,8 @@ namespace Ghost
     private IGhostBus _bus;
     private IGhostData _data;
     private MetricsCollector _metricsCollector;
-    private GhostFatherConnection _connection;
     private bool _isInitialized;
+    private ServiceCollection _services;
 
     // Static accessor for the singleton instance
     public static GhostProcess Instance => _instance;
@@ -53,9 +53,11 @@ namespace Ghost
 
       // Set current app
       _currentApp.Value = app;
+      app.GhostProcess = this;
+      _services = app.Services;
 
       // Register app with unique ID
-      string appId = app.Config?.App?.Id ?? Guid.NewGuid().ToString();
+      string appId = app.Config?.App.Id ?? Guid.NewGuid().ToString();
       _registeredApps.TryAdd(appId, app);
 
       // Initialize core systems if needed
@@ -69,7 +71,7 @@ namespace Ghost
     /// Initialize with explicit configuration
     /// </summary>
     /// <param name="config">Configuration to use</param>
-    public void Initialize(GhostConfig config)
+    private void Initialize(GhostConfig config)
     {
       _lock.Wait();
       try
@@ -78,6 +80,7 @@ namespace Ghost
 
         // Store configuration
         _config = config ?? throw new ArgumentNullException(nameof(config));
+        _services.AddSingleton(_config);
 
         // Initialize data paths
         string dataPath = config.Core.DataPath ?? Path.Combine(
@@ -102,15 +105,15 @@ namespace Ghost
 
         // Bus initialization
         _bus = new GhostBus(_cache);
+        _services.AddSingleton<IGhostBus>(_bus);
 
         // Database initialization
-        var services = new ServiceCollection();
-        services.AddSingleton<IGhostLogger>(logger);
+        _services.AddSingleton<IGhostLogger>(logger);
         G.Initialize(logger);
 
         // Add database services
         IDatabaseClient db = GetDatabaseClient();
-        services.AddSingleton(db);
+        _services.AddSingleton(db);
 
         var kvStore = new SQLiteKeyValueStore(db);
         var schema = db.DatabaseType == DatabaseType.PostgreSQL
@@ -119,6 +122,7 @@ namespace Ghost
 
         _data = new GhostData(db, kvStore, _cache, schema);
         _data.InitializeAsync().GetAwaiter().GetResult();
+        _services.AddSingleton(_data);
 
         // Metrics initialization
         _metricsCollector = new MetricsCollector(config.Core.MetricsInterval);
@@ -254,13 +258,6 @@ namespace Ghost
       try
       {
         if (!_isInitialized) return;
-
-        // Dispose connection
-        if (_connection != null)
-        {
-          await _connection.DisposeAsync();
-          _connection = null;
-        }
 
         // Dispose subsystems
         if (_data != null)

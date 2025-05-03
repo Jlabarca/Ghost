@@ -16,6 +16,7 @@ public static partial class G
     public static void Initialize(IGhostLogger logger)
     {
         _logger = logger;
+        _logger.LogInformation($"{_logger.GetType().Name} G initialized");
     }
 
     /// <summary>

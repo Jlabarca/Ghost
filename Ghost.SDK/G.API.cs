@@ -2,7 +2,6 @@ using Ghost.Core.Config;
 using Ghost.Core.Data;
 using Ghost.Core.Monitoring;
 using Ghost.Core.Storage;
-using Ghost;
 
 namespace Ghost;
 
@@ -14,25 +13,25 @@ public static partial class G
 
         #region Direct Access to Subsystems
 
-        /// <summary>
-        /// Direct access to the configuration
-        /// </summary>
-        public static GhostConfig Config => GhostProcess.Instance.Config;
+  /// <summary>
+  /// Direct access to the configuration
+  /// </summary>
+  public static GhostConfig Config => GhostProcess.Instance.Config;
 
-        /// <summary>
-        /// Direct access to the data layer
-        /// </summary>
-        public static IGhostData Data => GhostProcess.Instance.Data;
+  /// <summary>
+  /// Direct access to the data layer
+  /// </summary>
+  public static IGhostData Data => GhostProcess.Instance.Data;
 
-        /// <summary>
-        /// Direct access to the message bus
-        /// </summary>
-        public static IGhostBus Bus => GhostProcess.Instance.Bus;
+  /// <summary>
+  /// Direct access to the message bus
+  /// </summary>
+  public static IGhostBus Bus => GhostProcess.Instance.Bus;
 
-        /// <summary>
-        /// Direct access to the metrics collector
-        /// </summary>
-        public static MetricsCollector Metrics => GhostProcess.Instance.Metrics;
+  /// <summary>
+  /// Direct access to the metrics collector
+  /// </summary>
+  public static MetricsCollector Metrics => GhostProcess.Instance.Metrics;
 
         #endregion
 
@@ -54,15 +53,6 @@ public static partial class G
   public static void Init(GhostApp app)
   {
     GhostProcess.Instance.Initialize(app);
-  }
-
-  /// <summary>
-  /// Initialize the Ghost system with configuration
-  /// </summary>
-  /// <param name="config">Configuration to use</param>
-  public static void Init(GhostConfig config)
-  {
-    GhostProcess.Instance.Initialize(config);
   }
 
         #endregion

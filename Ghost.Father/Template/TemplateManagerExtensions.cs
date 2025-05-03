@@ -1,11 +1,7 @@
 using Ghost.Core.Exceptions;
 using Scriban;
 using Scriban.Runtime;
-using System;
-using System.Collections.Generic;
-using System.IO;
 using System.Text;
-using System.Threading.Tasks;
 
 namespace Ghost.Templates;
 

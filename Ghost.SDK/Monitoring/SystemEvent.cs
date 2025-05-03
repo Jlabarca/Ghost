@@ -1,5 +1,5 @@
+using Ghost.Core;
 using MemoryPack;
-using System;
 
 namespace Ghost
 {

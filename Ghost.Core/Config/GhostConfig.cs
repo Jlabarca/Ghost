@@ -1,4 +1,5 @@
 using Ghost.Core.Modules;
+using Microsoft.Extensions.DependencyInjection;
 using YamlDotNet.Serialization;
 using YamlDotNet.Serialization.NamingConventions;
 
@@ -14,7 +15,7 @@ public class GhostConfig
     public T GetModuleConfig<T>(string name) where T : ModuleConfig =>
         HasModule(name) ? (T)Modules[name] : null;
 
-    public static async Task<GhostConfig> LoadAsync(string path = ".ghost.yaml")
+    public static async Task<GhostConfig?> LoadAsync(string path = ".ghost.yaml")
     {
         var yaml = await File.ReadAllTextAsync(path);
         var deserializer = new DeserializerBuilder()

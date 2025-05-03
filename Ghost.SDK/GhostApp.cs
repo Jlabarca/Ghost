@@ -1,13 +1,12 @@
 using Ghost.Core;
 using Ghost.Core.Config;
+using Ghost.Core.Data;
+using Ghost.Core.Storage;
 using Microsoft.Extensions.DependencyInjection;
 using System.Reflection;
 
 namespace Ghost;
 
-/// <summary>
-/// Defines the current state of a Ghost application
-/// </summary>
 public enum GhostAppState
 {
   Created,
@@ -17,37 +16,21 @@ public enum GhostAppState
   Stopped,
   Failed
 }
-
-/// <summary>
-/// Base class for Ghost applications and services
-/// </summary>
 public class GhostApp : IAsyncDisposable
 {
-  protected ServiceCollection Services { get; } = new ServiceCollection();
 
-  /// <summary>
-  /// Configuration for the app
-  /// </summary>
-  public GhostConfig Config { get; private set; }
+  internal protected ServiceCollection Services { get; } = new ServiceCollection();
 
-  /// <summary>
-  /// Access to the Ghost process and subsystems
-  /// </summary>
-  public GhostProcess GhostProcess { get; private set; }
+  public GhostConfig? Config => _config;
 
-  /// <summary>
-  /// Connection to GhostFather monitoring system
-  /// </summary>
-  private GhostFatherConnection Connection { get; set; }
+  private GhostConfig? _config;
 
-  /// <summary>
-  /// Is this a long-running service
-  /// </summary>
+  public GhostProcess GhostProcess { get; internal set; }
+
+  private GhostFatherConnection? Connection { get; set; }
+
   public bool IsService { get; protected set; }
 
-  /// <summary>
-  /// Should the app automatically connect to GhostFather
-  /// </summary>
   public bool AutoGhostFather { get; protected set; } = true;
 
   /// <summary>
@@ -78,51 +61,41 @@ public class GhostApp : IAsyncDisposable
   /// <summary>
   /// Event fired when the application state changes
   /// </summary>
-  public event EventHandler<GhostAppState> StateChanged;
+  public event EventHandler<GhostAppState>? StateChanged;
 
   /// <summary>
   /// Event fired when an error occurs in the application
   /// </summary>
-  public event EventHandler<Exception> ErrorOccurred;
+  public event EventHandler<Exception>? ErrorOccurred;
+
+  protected IGhostBus Bus => GhostProcess.Bus;
+  protected IGhostData Data => GhostProcess.Data;
 
   private CancellationTokenSource _cts = new CancellationTokenSource();
-  private Timer _tickTimer;
-  private int _restartAttempts = 0;
+  private int _restartAttempts;
   private DateTime? _lastRestartTime;
+  private bool _initialized;
+  private bool _isRunning;
+  private bool _disposed;
+  private IEnumerable<string> _lastArgs;
 
-  /// <summary>
-  /// Constructor with optional configuration
-  /// </summary>
-  /// <param name="config">Configuration for the app</param>
-  protected GhostApp(GhostConfig? config = null)
+  public void Execute(IEnumerable<string> args = null, GhostConfig? config = null)
   {
-    // Set default values
-    Config = config ?? CreateDefaultConfig();
-
-    // Initialize Ghost process
-    GhostProcess = new GhostProcess();
-    GhostProcess.Initialize(this);
-    StartAsync().GetAwaiter().GetResult();
-
-    // Apply settings from attributes and configuration
-    ApplySettings();
-
-    L.LogInfo($"Initialized GhostApp: {GetType().Name}");
-  }
-
-
-  /// <summary>
-  /// Creates a new instance of a Ghost application
-  /// </summary>
-  /// <typeparam name="T">Type of application to create</typeparam>
-  /// <param name="config">Optional configuration</param>
-  /// <returns>A new instance of the specified app type</returns>
-  public static T Create<T>(GhostConfig config = null) where T : GhostApp, new()
-  {
-    return new T()
+    if (State != GhostAppState.Created && State != GhostAppState.Stopped && State != GhostAppState.Failed)
     {
-        Config = config ?? new T().LoadConfigFromYaml()
-    };
+      L.LogWarn($"Cannot start {GetType().Name} in state {State}");
+      return;
+    }
+
+    config ??= LoadConfigFromYaml();
+    config ??= CreateDefaultConfig();
+    _config = config;
+
+    _lastArgs = args;
+
+    G.Init(this);
+
+    StartAsync(args).GetAwaiter().GetResult();
   }
 
   /// <summary>
@@ -210,7 +183,7 @@ public class GhostApp : IAsyncDisposable
   /// <summary>
   /// Loads configuration from YAML file
   /// </summary>
-  private GhostConfig LoadConfigFromYaml()
+  private GhostConfig? LoadConfigFromYaml()
   {
     try
     {
@@ -311,25 +284,21 @@ public class GhostApp : IAsyncDisposable
   /// <summary>
   /// Starts the application asynchronously
   /// </summary>
-  public async virtual Task StartAsync(IEnumerable<string> args = null)
+  private async Task StartAsync(IEnumerable<string> args)
   {
+    // Apply settings from attributes and configuration
+    ApplySettings();
+
     try
     {
-      // Prevent starting multiple times
-      if (State != GhostAppState.Created && State != GhostAppState.Stopped && State != GhostAppState.Failed)
-      {
-        L.LogWarn($"Cannot start {GetType().Name} in state {State}");
-        return;
-      }
+      // Call lifecycle hooks
+      await OnBeforeRunAsync();
 
       // Update state and notify
       UpdateState(GhostAppState.Starting);
 
       // Create new cancellation token source
       _cts = new CancellationTokenSource();
-
-      // Call lifecycle hooks
-      await OnBeforeRunAsync();
 
       // Log start
       L.LogInfo($"Starting {GetType().Name}...");
@@ -340,14 +309,14 @@ public class GhostApp : IAsyncDisposable
       // Start tick timer if this is a service
       if (IsService && TickInterval > TimeSpan.Zero)
       {
-        _tickTimer = new Timer(OnTickCallback, null, TimeSpan.Zero, TickInterval);
+        //_tickTimer
       }
 
       // Update state
       UpdateState(GhostAppState.Running);
 
       // Run the application
-      await RunAsync(args ?? Array.Empty<string>());
+      await RunAsync(args);
 
       // Report completed state for one-shot apps
       if (!IsService)
@@ -422,7 +391,7 @@ public class GhostApp : IAsyncDisposable
     await Task.Delay(delayMs);
 
     // Restart
-    await StartAsync();
+    await StartAsync(_lastArgs);
   }
 
   /// <summary>
@@ -538,7 +507,7 @@ public class GhostApp : IAsyncDisposable
   /// <summary>
   /// Stop the application
   /// </summary>
-  public virtual async Task StopAsync()
+  public async Task StopAsync()
   {
     // Skip if already stopped
     if (State == GhostAppState.Stopped || State == GhostAppState.Stopping)
@@ -553,13 +522,6 @@ public class GhostApp : IAsyncDisposable
 
       // Cancel any operations
       _cts.Cancel();
-
-      // Stop tick timer
-      if (_tickTimer != null)
-      {
-        await _tickTimer.DisposeAsync();
-        _tickTimer = null;
-      }
 
       // Report stopping state
       await ReportHealthAsync("Stopping", "Application is stopping");
@@ -630,131 +592,22 @@ public class GhostApp : IAsyncDisposable
   /// <summary>
   /// Executes the application and returns when completed
   /// </summary>
-  public async Task ExecuteAsync(IEnumerable<string> args = null)
-  {
-    await StartAsync(args);
-
-    // For services, wait until explicitly stopped
-    if (IsService)
-    {
-      // Create a task completion source that never completes unless cancelled
-      var tcs = new TaskCompletionSource<bool>();
-
-      // Set up cancellation to release the wait
-      using var cts = new CancellationTokenSource();
-      cts.Token.Register(() => tcs.TrySetResult(true));
-
-      // Wait for cancellation
-      await tcs.Task;
-    }
-  }
-}
-
-/// <summary>
-/// Builder for configuring and creating Ghost applications
-/// </summary>
-public class GhostAppBuilder
-{
-  private Type _appType;
-  private GhostConfig _config;
-  private bool _isService;
-  private bool _autoGhostFather = true;
-  private bool _autoMonitor = true;
-  private bool _autoRestart;
-  private int _maxRestartAttempts = 3;
-  private TimeSpan _tickInterval = TimeSpan.FromSeconds(5);
-
-  /// <summary>
-  /// Specifies the app type to create
-  /// </summary>
-  public GhostAppBuilder UseApp<T>() where T : GhostApp, new()
-  {
-    _appType = typeof(T);
-    return this;
-  }
-
-  /// <summary>
-  /// Sets the configuration for the app
-  /// </summary>
-  public GhostAppBuilder WithConfig(GhostConfig config)
-  {
-    _config = config;
-    return this;
-  }
-
-  /// <summary>
-  /// Configures the app as a service
-  /// </summary>
-  public GhostAppBuilder AsService(bool isService = true)
-  {
-    _isService = isService;
-    return this;
-  }
-
-  /// <summary>
-  /// Configures auto-connection to GhostFather
-  /// </summary>
-  public GhostAppBuilder WithGhostFather(bool autoConnect = true)
-  {
-    _autoGhostFather = autoConnect;
-    return this;
-  }
-
-  /// <summary>
-  /// Configures auto-monitoring
-  /// </summary>
-  public GhostAppBuilder WithMonitoring(bool autoMonitor = true)
-  {
-    _autoMonitor = autoMonitor;
-    return this;
-  }
-
-  /// <summary>
-  /// Configures auto-restart behavior
-  /// </summary>
-  public GhostAppBuilder WithAutoRestart(bool autoRestart = true, int maxAttempts = 3)
-  {
-    _autoRestart = autoRestart;
-    _maxRestartAttempts = maxAttempts;
-    return this;
-  }
-
-  /// <summary>
-  /// Sets the tick interval for services
-  /// </summary>
-  public GhostAppBuilder WithTickInterval(TimeSpan interval)
-  {
-    _tickInterval = interval;
-    return this;
-  }
-
-  /// <summary>
-  /// Builds the configured app
-  /// </summary>
-  public GhostApp Build()
-  {
-    if (_appType == null)
-    {
-      throw new InvalidOperationException("App type must be specified with UseApp<T>()");
-    }
-
-    // Create instance
-    var app = (GhostApp)Activator.CreateInstance(_appType);
-
-    // Apply configuration if provided
-    // if (_config != null)
-    // {
-    //   app.Config = _config;
-    // }
-    //
-    // // Apply settings
-    // app.IsService = _isService;
-    // app.AutoGhostFather = _autoGhostFather;
-    // app.AutoMonitor = _autoMonitor;
-    // app.AutoRestart = _autoRestart;
-    // app.MaxRestartAttempts = _maxRestartAttempts;
-    // app.TickInterval = _tickInterval;
-
-    return app;
-  }
+  // public async Task ExecuteAsync(IEnumerable<string> args = null)
+  // {
+  //   await StartAsync(args);
+  //
+  //   // For services, wait until explicitly stopped
+  //   if (IsService)
+  //   {
+  //     // Create a task completion source that never completes unless cancelled
+  //     var tcs = new TaskCompletionSource<bool>();
+  //
+  //     // Set up cancellation to release the wait
+  //     using var cts = new CancellationTokenSource();
+  //     cts.Token.Register(() => tcs.TrySetResult(true));
+  //
+  //     // Wait for cancellation
+  //     await tcs.Task;
+  //   }
+  //}
 }

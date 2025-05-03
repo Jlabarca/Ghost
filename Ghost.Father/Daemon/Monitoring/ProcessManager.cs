@@ -5,7 +5,10 @@ using Ghost.Core.Exceptions;
 using Ghost.Core.Modules;
 using Ghost.Core.Storage;
 using MemoryPack;
+using Microsoft.Extensions.DependencyInjection;
 using System.Collections.Concurrent;
+using System.Diagnostics;
+using Spectre.Console;
 
 namespace Ghost.Father;
 
@@ -28,19 +31,17 @@ public class ProcessManager : IAsyncDisposable
     private readonly TimeSpan _startupTimeout = TimeSpan.FromSeconds(30);
     private readonly int _maxStartAttempts = 3;
 
-    public ProcessManager(
-        GhostConfig config,
-        HealthMonitor healthMonitor,
-        IGhostBus bus,
-        IGhostData data,
-        StateManager stateManager)
+
+    public ProcessManager(ServiceCollection services)
     {
-        _bus = bus ?? throw new ArgumentNullException(nameof(bus));
-        _data = data ?? throw new ArgumentNullException(nameof(data));
-        _config = config ?? throw new ArgumentNullException(nameof(config));
-        _healthMonitor = healthMonitor ?? throw new ArgumentNullException(nameof(healthMonitor));
-        _stateManager = stateManager ?? throw new ArgumentNullException(nameof(stateManager));
+        using var serviceProvider = services.BuildServiceProvider();
+        _bus = serviceProvider.GetRequiredService<IGhostBus>();
+        _data = serviceProvider.GetRequiredService<IGhostData>();
+        _config = serviceProvider.GetRequiredService<GhostConfig>();
+        _healthMonitor = serviceProvider.GetRequiredService<HealthMonitor>();
+        _stateManager = serviceProvider.GetRequiredService<StateManager>();
         _processes = new ConcurrentDictionary<string, ProcessInfo>();
+        InitializeAsync();
     }
 
     public async Task InitializeAsync()
@@ -168,7 +169,7 @@ public class ProcessManager : IAsyncDisposable
             // Save state and register for monitoring
             await _stateManager.SaveProcessAsync(process);
             await _healthMonitor.RegisterProcessAsync(process);
-            L.LogInfo("Registered new process: {Id} ({Name})", process.Id, process.Metadata.Name);
+            L.LogInfo("Registered new process: {0} ({1})", process.Id, process.Metadata.Name);
 
             return process;
         }
@@ -514,6 +515,205 @@ public class ProcessManager : IAsyncDisposable
         finally
         {
             _lock.Release();
+        }
+    }
+
+    public async Task TerminateGhostProcessesAsync(bool force)
+    {
+        try
+        {
+            AnsiConsole.MarkupLine("[grey]Checking for running Ghost processes...[/]");
+
+            var ghostProcesses = FindGhostProcesses();
+
+            if (ghostProcesses.Count > 0)
+            {
+                AnsiConsole.MarkupLine(
+                    $"[yellow]Found {ghostProcesses.Count} running Ghost processes that need to be terminated:[/]");
+
+                DisplayProcessList(ghostProcesses);
+
+                if (!force)
+                {
+                    var confirmKill =
+                        AnsiConsole.Confirm("[yellow]Would you like to terminate these processes?[/]", true);
+                    if (!confirmKill)
+                    {
+                        throw new GhostException(
+                            "Installation cannot proceed while Ghost processes are running. Please terminate them manually or use --force.",
+                            ErrorCode.InstallationError);
+                    }
+                }
+
+                await TerminateProcessesAsync(ghostProcesses);
+
+                // Check if all processes were terminated
+                var remainingProcesses = FindGhostProcesses();
+
+                if (remainingProcesses.Count > 0 && force)
+                {
+                    AnsiConsole.MarkupLine(
+                        "[yellow]Warning:[/] Some Ghost processes could not be terminated. Installation may fail.");
+                }
+                else if (remainingProcesses.Count > 0)
+                {
+                    throw new GhostException(
+                        "Could not terminate all Ghost processes. Please terminate them manually or use --force.",
+                        ErrorCode.InstallationError);
+                }
+                else
+                {
+                    AnsiConsole.MarkupLine("[green]All Ghost processes terminated successfully.[/]");
+                }
+            }
+            else
+            {
+                AnsiConsole.MarkupLine("[grey]No running Ghost processes found.[/]");
+            }
+        }
+        catch (Exception ex) when (!(ex is GhostException))
+        {
+            AnsiConsole.MarkupLine($"[yellow]Warning:[/] Error checking for Ghost processes: {ex.Message}");
+
+            if (!force)
+            {
+                throw new GhostException(
+                    "Could not check for running Ghost processes. Please ensure no Ghost processes are running or use --force.",
+                    ex,
+                    ErrorCode.InstallationError);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Finds all running Ghost processes
+    /// </summary>
+    private List<Process> FindGhostProcesses()
+    {
+        return Process.GetProcesses()
+            .Where(p =>
+            {
+                try
+                {
+                    return p.ProcessName.ToLowerInvariant().Contains("ghost") ||
+                           (p.MainModule?.FileName?.Contains("\\Ghost\\", StringComparison.OrdinalIgnoreCase) ??
+                            false);
+                }
+                catch
+                {
+                    // Process access might be denied, skip it
+                    return false;
+                }
+            })
+            .ToList();
+    }
+
+    /// <summary>
+    /// Displays a list of processes to the console
+    /// </summary>
+    private void DisplayProcessList(List<Process> processes)
+    {
+        foreach (var process in processes)
+        {
+            try
+            {
+                string processDetails = $"{process.ProcessName} (PID: {process.Id})";
+                try
+                {
+                    if (process.MainModule != null)
+                    {
+                        processDetails += $" - {process.MainModule.FileName}";
+                    }
+                }
+                catch
+                {
+                    // Ignore if we can't get the module info
+                }
+
+                AnsiConsole.MarkupLine($" [grey]· {processDetails}[/]");
+            }
+            catch
+            {
+                AnsiConsole.MarkupLine($" [grey]· Unknown process (PID: {process.Id})[/]");
+            }
+        }
+    }
+
+    /// <summary>
+    /// Terminates a list of processes
+    /// </summary>
+    private async Task TerminateProcessesAsync(List<Process> processes)
+    {
+        foreach (var process in processes)
+        {
+            try
+            {
+                AnsiConsole.MarkupLine(
+                    $"[grey]Terminating process: {process.ProcessName} (PID: {process.Id})[/]");
+                process.Kill(true); // true = kill entire process tree
+                await Task.Delay(500); // Brief delay to ensure process is terminated
+            }
+            catch (Exception ex)
+            {
+                AnsiConsole.MarkupLine(
+                    $"[yellow]Warning:[/] Could not terminate process {process.Id}: {ex.Message}");
+            }
+        }
+
+        // Give processes time to properly shut down
+        AnsiConsole.MarkupLine("[grey]Waiting for processes to terminate...[/]");
+        await Task.Delay(2000);
+    }
+
+    public async Task RegisterSelfAsync()
+    {
+        var selfProcess = Process.GetCurrentProcess();
+        var registration = new ProcessRegistration
+        {
+            Id = "ghost-daemon",
+            ExecutablePath = selfProcess.MainModule?.FileName ?? string.Empty,
+            Arguments = string.Join(" ", Environment.GetCommandLineArgs()),
+            WorkingDirectory = Environment.CurrentDirectory,
+            Type = "daemon",
+            Version = "1.0.0",
+            Environment = new Dictionary<string, string>(),
+            Configuration = new Dictionary<string, string>()
+        };
+
+        await RegisterProcessAsync(registration);
+    }
+
+    public async Task DiscoverGhostAppsAsync()
+    {
+        var ghostApps = new List<ProcessRegistration>();
+        var ghostAppPath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "Ghost", "Apps");
+
+        if (Directory.Exists(ghostAppPath))
+        {
+            foreach (var appDir in Directory.GetDirectories(ghostAppPath))
+            {
+                var appName = Path.GetFileName(appDir);
+                var appExe = Path.Combine(appDir, $"{appName}.exe");
+                if (File.Exists(appExe))
+                {
+                    ghostApps.Add(new ProcessRegistration
+                    {
+                        Id = appName,
+                        ExecutablePath = appExe,
+                        Arguments = string.Empty,
+                        WorkingDirectory = appDir,
+                        Type = "app",
+                        Version = "1.0.0",
+                        Environment = new Dictionary<string, string>(),
+                        Configuration = new Dictionary<string, string>()
+                    });
+                }
+            }
+        }
+
+        foreach (var app in ghostApps)
+        {
+            await RegisterProcessAsync(app);
         }
     }
 }

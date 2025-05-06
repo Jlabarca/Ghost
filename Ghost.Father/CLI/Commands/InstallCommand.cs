@@ -4,7 +4,6 @@ using Spectre.Console;
 using Spectre.Console.Cli;
 using System.ComponentModel;
 using System.Diagnostics;
-using Ghost.Core.Storage;
 using Ghost.Templates;
 using Microsoft.Extensions.DependencyInjection;
 

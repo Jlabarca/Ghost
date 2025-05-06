@@ -1,5 +1,4 @@
 using Ghost.Core.Modules;
-using Microsoft.Extensions.DependencyInjection;
 using YamlDotNet.Serialization;
 using YamlDotNet.Serialization.NamingConventions;
 

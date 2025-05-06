@@ -52,18 +52,9 @@ namespace Ghost.Core.Storage
 
                 // Store message with channel prefix
                 string key = $"message:{channel}:{messageId}";
-                await _cache.SetAsync(key, serialized);
+                //expiry ??= TimeSpan.FromHours(1); // Default expiry time is 1 hour
 
-                // Set expiration if provided
-                if (expiry.HasValue)
-                {
-                    await _cache.ExpireAsync(key, expiry.Value);
-                }
-                else
-                {
-                    // Default expiry time is 1 hour
-                    await _cache.ExpireAsync(key, TimeSpan.FromHours(1));
-                }
+                await _cache.SetAsync(key, serialized, expiry);
 
                 // Store channel in active channels set
                 await _cache.SetAsync("channels:active", channel);
@@ -163,7 +154,7 @@ namespace Ghost.Core.Storage
             try
             {
                 // Get active channels
-                var channels = await _cache.GetAllAsync<string>("channels:active");
+                var channels = await _cache.GetManyAsync<string>("channels:active", cancellationToken);
 
                 // Filter channels that match the pattern
                 var matchingChannels = channels.Where(ch => MatchesPattern(ch, channelPattern)).ToList();
@@ -171,7 +162,8 @@ namespace Ghost.Core.Storage
                 foreach (var channel in matchingChannels)
                 {
                     // Get latest message ID for the channel
-                    string lastMessageId = await _cache.GetAsync<string>($"channel:{channel}:last", cancellationToken);
+                    var key = string.Format("channel:{0}:last", channel);
+                    string lastMessageId = await _cache.GetAsync<string>(key, cancellationToken);
 
                     if (!string.IsNullOrEmpty(lastMessageId))
                     {

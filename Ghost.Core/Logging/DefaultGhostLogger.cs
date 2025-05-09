@@ -43,15 +43,17 @@ public class DefaultGhostLogger : IGhostLogger
         { LogLevel.Critical, ConsoleColor.DarkRed }
     };
 
-    public DefaultGhostLogger(ICache cache, GhostLoggerConfiguration config)
+    public DefaultGhostLogger(GhostLoggerConfiguration config)
     {
-        _cache = cache;
         _config = config;
         _processId = Guid.NewGuid().ToString();
         _redisBuffer = new ConcurrentQueue<LogEntry>();
 
         Directory.CreateDirectory(_config.LogsPath);
         Directory.CreateDirectory(_config.OutputsPath);
+    }
+    private DefaultGhostLogger(DefaultGhostLogger config)
+    {
     }
 
     public void SetCache(ICache cache)

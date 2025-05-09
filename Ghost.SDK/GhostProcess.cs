@@ -1,9 +1,15 @@
 using Ghost.Core.Config;
+using Ghost.Core.Configuration;
 using Ghost.Core.Data;
+using Ghost.Core.Data.Decorators;
+using Ghost.Core.Data.Implementations;
 using Ghost.Core.Logging;
 using Ghost.Core.Monitoring;
+using Ghost.Core.Pooling;
 using Ghost.Core.Storage;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 using System.Collections.Concurrent;
 
 namespace Ghost
@@ -23,8 +29,9 @@ namespace Ghost
     private ICache _cache;
     private IGhostBus _bus;
     private IGhostData _data;
-    private MetricsCollector _metricsCollector;
+    private IMetricsCollector _metricsCollector;
     private bool _isInitialized;
+    private ServiceProvider _serviceProvider;
     private ServiceCollection _services;
 
     // Static accessor for the singleton instance
@@ -38,7 +45,7 @@ namespace Ghost
     public ICache Cache => _cache;
     public IGhostBus Bus => _bus;
     public IGhostData Data => _data;
-    public MetricsCollector Metrics => _metricsCollector;
+    public IMetricsCollector Metrics => _metricsCollector;
 
     // Private constructor to enforce singleton
     internal GhostProcess() { }
@@ -80,52 +87,14 @@ namespace Ghost
 
         // Store configuration
         _config = config ?? throw new ArgumentNullException(nameof(config));
-        _services.AddSingleton(_config);
 
-        // Initialize data paths
-        string dataPath = config.Core.DataPath ?? Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-            "Ghost", "data");
-        Directory.CreateDirectory(dataPath);
 
-        // Cache initialization
-        string cachePath = Path.Combine(dataPath, "cache");
-        Directory.CreateDirectory(cachePath);
-        _cache = new LocalCache(cachePath);
+        // Initialize all services using dependency injection
+        ConfigureServices(config);
+        _serviceProvider = _services.BuildServiceProvider();
 
-        // Logging initialization
-        var loggerConfig = new GhostLoggerConfiguration
-        {
-            LogsPath = Config.Core.LogsPath ?? "logs",
-            OutputsPath = Path.Combine(Config.Core.LogsPath ?? "logs", "outputs"),
-            LogLevel = Microsoft.Extensions.Logging.LogLevel.Information
-        };
-        var logger = new DefaultGhostLogger(_cache, loggerConfig);
-        L.Initialize(logger);
-
-        // Bus initialization
-        _bus = new GhostBus(_cache);
-        _services.AddSingleton<IGhostBus>(_bus);
-
-        // Database initialization
-        _services.AddSingleton<IGhostLogger>(logger);
-        G.Initialize(logger);
-
-        // Add database services
-        IDatabaseClient db = GetDatabaseClient();
-        _services.AddSingleton(db);
-
-        var kvStore = new SQLiteKeyValueStore(db);
-        var schema = db.DatabaseType == DatabaseType.PostgreSQL
-            ? new PostgresSchemaManager(db)
-            : new SQLiteSchemaManager(db) as ISchemaManager;
-
-        _data = new GhostData(db, kvStore, _cache, schema);
-        _data.InitializeAsync().GetAwaiter().GetResult();
-        _services.AddSingleton(_data);
-
-        // Metrics initialization
-        _metricsCollector = new MetricsCollector(config.Core.MetricsInterval);
+        // Set up core services
+        SetupCoreServices();
 
         _isInitialized = true;
         L.LogInfo("GhostProcess initialized successfully");
@@ -137,25 +106,192 @@ namespace Ghost
     }
 
     /// <summary>
-    /// Get the appropriate database client based on configuration
+    /// Configure all services for dependency injection
     /// </summary>
-    private IDatabaseClient GetDatabaseClient()
+    /// <param name="config">Application configuration</param>
+    private void ConfigureServices(GhostConfig config)
     {
-      // Use PostgreSQL if configured
-      if (Config.HasModule("postgres"))
-      {
-        var pgConfig = Config.GetModuleConfig<PostgresConfig>("postgres");
-        return new SQLiteDatabase(pgConfig.ConnectionString); // This would be PostgresDatabase in a full implementation
-      }
+      // Register configuration
+      _services.AddSingleton(config);
 
-      // Default to SQLite
-      var dbPath = Path.Combine(
-          Config.GetModuleConfig<LocalCacheConfig>("cache")?.Path ?? "data",
-          "ghost.db");
-      return new SQLiteDatabase(dbPath);
+      //StateManager
+
+
+      _services.AddSingleton<IGhostBus>(sp => new GhostBus(sp.GetRequiredService<ICache>()));
+
+      // Register logging
+      _services.AddLogging(builder =>
+      {
+        builder.SetMinimumLevel(LogLevel.Debug);
+      });
+
+      // Setup cache paths
+      string dataPath = config.Core.DataPath ?? Path.Combine(
+          Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+          "Ghost", "data");
+      Directory.CreateDirectory(dataPath);
+
+      string cachePath = Path.Combine(dataPath, "cache");
+      Directory.CreateDirectory(cachePath);
+
+      // Configure logger
+      var loggerConfig = new GhostLoggerConfiguration
+      {
+          LogsPath = config.Core.LogsPath ?? "logs",
+          OutputsPath = Path.Combine(config.Core.LogsPath ?? "logs", "outputs"),
+          LogLevel = LogLevel.Debug,
+      };
+
+      _services.AddSingleton<IGhostLogger>(sp =>
+      {
+        var logger = new DefaultGhostLogger(loggerConfig);
+        L.Initialize(logger);
+        G.Initialize(logger);
+        return logger;
+      });
+      _services.AddSingleton<ICache>(sp => new MemoryCache(sp.GetRequiredService<IGhostLogger>()));
+      _services.AddSingleton<IGhostBus>(sp => new GhostBus(sp.GetRequiredService<ICache>()));
+
+      // Register options
+      var postgresConfig = GetPostgresConfig();
+      _services.AddSingleton(Options.Create(postgresConfig));
+
+      var cachingConfig = new CachingConfiguration
+      {
+          UseL1Cache = true,
+          DefaultL1Expiration = TimeSpan.FromMinutes(5),
+          DefaultL1SlidingExpiration = TimeSpan.FromMinutes(1),
+          MaxL1CacheItems = 10000
+      };
+      _services.AddSingleton(Options.Create(cachingConfig));
+
+      var resilienceConfig = new ResilienceConfiguration
+      {
+          EnableRetry = true,
+          RetryCount = config.Core.MaxRetries,
+          RetryBaseDelayMs = (int)config.Core.RetryDelay.TotalMilliseconds,
+          EnableCircuitBreaker = true,
+          CircuitBreakerThreshold = 5,
+          CircuitBreakerDurationMs = 30000
+      };
+      _services.AddSingleton(Options.Create(resilienceConfig));
+
+      // Register metrics
+      _services.AddSingleton<IMetricsCollector>(sp =>
+          new MetricsCollector(config.Core.MetricsInterval));
+
+      // Register DB connection pooling
+      _services.AddSingleton<ConnectionPoolManager>();
+
+      // Register database client
+      _services.AddSingleton<IDatabaseClient>(sp =>
+          new PostgreSqlClient(
+              postgresConfig.ConnectionString,
+              sp.GetRequiredService<ILogger<PostgreSqlClient>>()));
+
+      // Register schema manager
+      _services.AddSingleton<ISchemaManager, PostgresSchemaManager>();
+
+      // Register data layer with decorator pattern
+// 1. Register the core implementation
+      _services.AddSingleton<CoreGhostData>();
+
+// 2. Register decorators with explicit factory functions
+      _services.AddSingleton<IGhostData>(sp =>
+      {
+        // Start with the innermost implementation
+        var core = sp.GetRequiredService<CoreGhostData>();
+
+        // Add resilient layer
+        var resilient = new ResilientGhostData(
+            core,
+            sp.GetRequiredService<ILogger<ResilientGhostData>>(),
+            sp.GetRequiredService<IOptions<ResilienceConfiguration>>()
+        );
+
+        // Add caching layer
+        var cached = new CachedGhostData(
+            resilient,
+            sp.GetRequiredService<ICache>(),
+            sp.GetRequiredService<IOptions<CachingConfiguration>>(),
+            sp.GetRequiredService<ILogger<CachedGhostData>>()
+          );
+
+        // Add instrumentation layer (outermost)
+        var instrumented = new InstrumentedGhostData(
+            cached,
+            sp.GetRequiredService<IMetricsCollector>(),
+            sp.GetRequiredService<ILogger<InstrumentedGhostData>>()
+        );
+
+        // Return the fully decorated chain
+        return instrumented;
+      });
     }
 
-        #region Metrics Methods
+    /// <summary>
+    /// Set up core services after dependency injection
+    /// </summary>
+    private void SetupCoreServices()
+    {
+      // Retrieve all core services from the DI container
+      try
+      {
+        _cache = _serviceProvider.GetRequiredService<ICache>();
+        _bus = _serviceProvider.GetRequiredService<IGhostBus>();
+        _data = _serviceProvider.GetRequiredService<IGhostData>();
+        _metricsCollector = _serviceProvider.GetRequiredService<IMetricsCollector>();
+
+        // Initialize logger for global access
+        var logger = _serviceProvider.GetRequiredService<IGhostLogger>();
+        L.Initialize(logger);
+        G.Initialize(logger);
+      }
+      catch (Exception e)
+      {
+        L.LogError(e, "Failed to set up core services");
+        throw;
+      }
+
+      // Initialize the data service
+      //_data.InitializeAsync().GetAwaiter().GetResult();
+    }
+
+    /// <summary>
+    /// Get the PostgreSQL configuration
+    /// </summary>
+    private PostgresConfiguration GetPostgresConfig()
+    {
+      var postgresConfig = new PostgresConfiguration
+      {
+          ConnectionString = "Host=localhost;Database=ghost;Username=ghost;Password=ghost",
+          MaxPoolSize = 100,
+          MinPoolSize = 5,
+          PrewarmConnections = false,
+          ConnectionLifetime = TimeSpan.FromMinutes(30),
+          ConnectionIdleLifetime = TimeSpan.FromMinutes(5),
+          CommandTimeout = 30,
+          EnableParameterLogging = false,
+          Schema = "public",
+          EnablePooling = true
+      };
+
+      // Use module config if available
+      if (Config?.HasModule("postgres") == true)
+      {
+          var pgConfig = Config.GetModuleConfig<PostgresConfig>("postgres");
+          if (pgConfig != null)
+          {
+              postgresConfig.ConnectionString = pgConfig.ConnectionString;
+              postgresConfig.MaxPoolSize = pgConfig.MaxPoolSize;
+              postgresConfig.CommandTimeout = (int)pgConfig.CommandTimeout.TotalSeconds;
+          }
+      }
+
+      return postgresConfig;
+    }
+
+    #region Metrics Methods
 
     /// <summary>
     /// Track a metric value
@@ -185,9 +321,9 @@ namespace Ghost
       );
     }
 
-        #endregion
+    #endregion
 
-        #region Data Methods
+    #region Data Methods
 
     /// <summary>
     /// Execute a SQL command
@@ -216,9 +352,9 @@ namespace Ghost
       return _config.Core.Settings.TryGetValue(name, out var value) ? value : defaultValue;
     }
 
-        #endregion
+    #endregion
 
-        #region Bus Methods
+    #region Bus Methods
 
     /// <summary>
     /// Publish a message
@@ -238,7 +374,7 @@ namespace Ghost
       return _bus.SubscribeAsync<T>(channelPattern, cancellationToken);
     }
 
-        #endregion
+    #endregion
 
     /// <summary>
     /// Ensure the process is initialized
@@ -259,17 +395,14 @@ namespace Ghost
       {
         if (!_isInitialized) return;
 
-        // Dispose subsystems
-        if (_data != null)
+        // Dispose all services through the service provider
+        if (_serviceProvider is IAsyncDisposable asyncDisposable)
         {
-          await _data.DisposeAsync();
-          _data = null;
+          await asyncDisposable.DisposeAsync();
         }
-
-        if (_bus != null)
+        else if (_serviceProvider is IDisposable disposable)
         {
-          await _bus.DisposeAsync();
-          _bus = null;
+          disposable.Dispose();
         }
 
         _isInitialized = false;

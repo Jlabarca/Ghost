@@ -32,6 +32,7 @@ internal class InMemoryDatabaseClient : IDatabaseClient
 
     return Task.FromResult(true);
   }
+
   public string ConnectionString
   {
     get;

@@ -154,21 +154,23 @@ namespace Ghost.Core.Storage
             try
             {
                 // Get active channels
-                var channels = await _cache.GetManyAsync<string>("channels:active", cancellationToken);
+                var keys = new List<string> { "channels:active" };
+                var channels = await _cache.GetManyAsync<string>(keys, cancellationToken);
 
                 // Filter channels that match the pattern
-                var matchingChannels = channels.Where(ch => MatchesPattern(ch, channelPattern)).ToList();
+                var matchingChannels = channels.Where(ch
+                        => MatchesPattern(ch.Key, channelPattern)).ToList();
 
                 foreach (var channel in matchingChannels)
                 {
                     // Get latest message ID for the channel
                     var key = string.Format("channel:{0}:last", channel);
-                    string lastMessageId = await _cache.GetAsync<string>(key, cancellationToken);
+                    string? lastMessageId = await _cache.GetAsync<string>(key, cancellationToken);
 
                     if (!string.IsNullOrEmpty(lastMessageId))
                     {
                         // Add to processing queue
-                        writer.TryWrite((channel, lastMessageId));
+                        writer.TryWrite((channel.Key, lastMessageId));
                     }
                 }
             }

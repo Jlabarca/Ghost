@@ -31,7 +31,7 @@ public static partial class G
   /// <summary>
   /// Direct access to the metrics collector
   /// </summary>
-  public static MetricsCollector Metrics => GhostProcess.Instance.Metrics;
+  public static IMetricsCollector Metrics => GhostProcess.Instance.Metrics;
 
         #endregion
 

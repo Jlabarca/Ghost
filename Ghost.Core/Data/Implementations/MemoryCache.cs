@@ -1,9 +1,5 @@
-using System;
+using Ghost.Core.Logging;
 using System.Collections.Concurrent;
-using System.Collections.Generic;
-using System.Linq;
-using System.Threading;
-using System.Threading.Tasks;
 using Microsoft.Extensions.Logging;
 
 namespace Ghost.Core.Data.Implementations
@@ -22,7 +18,7 @@ namespace Ghost.Core.Data.Implementations
     }
 
     private readonly ConcurrentDictionary<string, CacheItem> _cache = new();
-    private readonly ILogger<MemoryCache> _logger;
+    private readonly IGhostLogger _logger;
     private readonly TimeSpan _defaultExpiry = TimeSpan.FromHours(1);
     private readonly TimeSpan _defaultSlidingExpiry = TimeSpan.FromMinutes(20);
     private readonly Timer _cleanupTimer;
@@ -42,7 +38,7 @@ namespace Ghost.Core.Data.Implementations
     /// Initializes a new instance of the <see cref="MemoryCache"/> class.
     /// </summary>
     /// <param name="logger">The logger.</param>
-    public MemoryCache(ILogger<MemoryCache> logger)
+    public MemoryCache(IGhostLogger logger)
     {
       _logger = logger ?? throw new ArgumentNullException(nameof(logger));
 

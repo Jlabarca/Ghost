@@ -122,6 +122,8 @@ public class AppInfo
         /// GhostFather instance port (for remote connections)
         /// </summary>
         public int GhostFatherPort { get; set; } = 5000;
+        public int MaxRetries { get; set; } = 3;
+        public TimeSpan RetryDelay { get; set; }
     }
 
 public class RedisConfig : ModuleConfig

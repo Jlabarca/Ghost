@@ -61,7 +61,7 @@ public class CommandValidator
         var requiredTypes = new[]
         {
             typeof(IGhostBus),
-            typeof(IStorageProvider)
+            //typeof(IStorageProvider)
         };
 
         foreach (var requiredType in requiredTypes)

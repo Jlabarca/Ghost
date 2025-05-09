@@ -32,12 +32,9 @@ public class InstrumentedGhostData : IGhostData
     }
 
     /// <inheritdoc />
-    public DatabaseType DatabaseType => _inner.DatabaseType;
-
-    /// <inheritdoc />
     public IDatabaseClient GetDatabaseClient() => _inner.GetDatabaseClient();
 
-        #region Key-Value Operations
+    #region Key-Value Operations
 
     /// <inheritdoc />
     public async Task<T?> GetAsync<T>(string key, CancellationToken ct = default)
@@ -54,7 +51,7 @@ public class InstrumentedGhostData : IGhostData
             var result = await _inner.GetAsync<T>(key, ct);
 
             sw.Stop();
-            RecordSuccess("get", sw.ElapsedMilliseconds);
+            await TrackSuccessMetricAsync("get", sw.ElapsedMilliseconds);
             activity?.SetTag("cache_hit", result != null);
 
             return result;
@@ -62,7 +59,7 @@ public class InstrumentedGhostData : IGhostData
         catch (Exception ex)
         {
             sw.Stop();
-            RecordError("get", sw.ElapsedMilliseconds, ex);
+            await TrackErrorMetricAsync("get", sw.ElapsedMilliseconds, ex);
             activity?.SetStatus(ActivityStatusCode.Error, ex.Message);
             throw;
         }
@@ -84,12 +81,12 @@ public class InstrumentedGhostData : IGhostData
             await _inner.SetAsync(key, value, expiry, ct);
 
             sw.Stop();
-            RecordSuccess("set", sw.ElapsedMilliseconds);
+            await TrackSuccessMetricAsync("set", sw.ElapsedMilliseconds);
         }
         catch (Exception ex)
         {
             sw.Stop();
-            RecordError("set", sw.ElapsedMilliseconds, ex);
+            await TrackErrorMetricAsync("set", sw.ElapsedMilliseconds, ex);
             activity?.SetStatus(ActivityStatusCode.Error, ex.Message);
             throw;
         }
@@ -109,7 +106,7 @@ public class InstrumentedGhostData : IGhostData
             var result = await _inner.DeleteAsync(key, ct);
 
             sw.Stop();
-            RecordSuccess("delete", sw.ElapsedMilliseconds);
+            await TrackSuccessMetricAsync("delete", sw.ElapsedMilliseconds);
             activity?.SetTag("deleted", result);
 
             return result;
@@ -117,7 +114,7 @@ public class InstrumentedGhostData : IGhostData
         catch (Exception ex)
         {
             sw.Stop();
-            RecordError("delete", sw.ElapsedMilliseconds, ex);
+            await TrackErrorMetricAsync("delete", sw.ElapsedMilliseconds, ex);
             activity?.SetStatus(ActivityStatusCode.Error, ex.Message);
             throw;
         }
@@ -137,7 +134,7 @@ public class InstrumentedGhostData : IGhostData
             var result = await _inner.ExistsAsync(key, ct);
 
             sw.Stop();
-            RecordSuccess("exists", sw.ElapsedMilliseconds);
+            await TrackSuccessMetricAsync("exists", sw.ElapsedMilliseconds);
             activity?.SetTag("exists", result);
 
             return result;
@@ -145,25 +142,20 @@ public class InstrumentedGhostData : IGhostData
         catch (Exception ex)
         {
             sw.Stop();
-            RecordError("exists", sw.ElapsedMilliseconds, ex);
+            await TrackErrorMetricAsync("exists", sw.ElapsedMilliseconds, ex);
             activity?.SetStatus(ActivityStatusCode.Error, ex.Message);
             throw;
         }
     }
-
-        #endregion
-
-        #region Batch Key-Value Operations
 
     /// <inheritdoc />
     public async Task<IDictionary<string, T?>> GetBatchAsync<T>(IEnumerable<string> keys, CancellationToken ct = default)
     {
         ThrowIfDisposed();
 
-        var keysList = keys as List<string> ?? keys.ToList();
-
+        var keysList = keys.ToList();
         using var activity = StartActivity("GhostData.GetBatchAsync");
-        activity?.SetTag("keys_count", keysList.Count);
+        activity?.SetTag("key_count", keysList.Count);
         activity?.SetTag("type", typeof(T).Name);
 
         var sw = Stopwatch.StartNew();
@@ -172,15 +164,25 @@ public class InstrumentedGhostData : IGhostData
             var result = await _inner.GetBatchAsync<T>(keysList, ct);
 
             sw.Stop();
-            RecordBatchSuccess("get_batch", keysList.Count, sw.ElapsedMilliseconds);
-            activity?.SetTag("found_count", result.Count(kv => kv.Value != null));
+            await TrackSuccessMetricAsync("get_batch", sw.ElapsedMilliseconds);
+
+            // Track batch size as a separate metric
+            await _metrics.TrackMetricAsync(new MetricValue
+            {
+                Name = "ghost.data.get_batch.size",
+                Value = keysList.Count,
+                Tags = new Dictionary<string, string> { ["operation"] = "get_batch" },
+                Timestamp = DateTime.UtcNow
+            });
+
+            activity?.SetTag("hit_count", result.Count(kvp => kvp.Value != null));
 
             return result;
         }
         catch (Exception ex)
         {
             sw.Stop();
-            RecordBatchError("get_batch", keysList.Count, sw.ElapsedMilliseconds, ex);
+            await TrackErrorMetricAsync("get_batch", sw.ElapsedMilliseconds, ex);
             activity?.SetStatus(ActivityStatusCode.Error, ex.Message);
             throw;
         }
@@ -192,7 +194,7 @@ public class InstrumentedGhostData : IGhostData
         ThrowIfDisposed();
 
         using var activity = StartActivity("GhostData.SetBatchAsync");
-        activity?.SetTag("items_count", items.Count);
+        activity?.SetTag("item_count", items.Count);
         activity?.SetTag("type", typeof(T).Name);
         activity?.SetTag("expiry", expiry?.ToString() ?? "default");
 
@@ -202,12 +204,21 @@ public class InstrumentedGhostData : IGhostData
             await _inner.SetBatchAsync(items, expiry, ct);
 
             sw.Stop();
-            RecordBatchSuccess("set_batch", items.Count, sw.ElapsedMilliseconds);
+            await TrackSuccessMetricAsync("set_batch", sw.ElapsedMilliseconds);
+
+            // Track batch size as a separate metric
+            await _metrics.TrackMetricAsync(new MetricValue
+            {
+                Name = "ghost.data.set_batch.size",
+                Value = items.Count,
+                Tags = new Dictionary<string, string> { ["operation"] = "set_batch" },
+                Timestamp = DateTime.UtcNow
+            });
         }
         catch (Exception ex)
         {
             sw.Stop();
-            RecordBatchError("set_batch", items.Count, sw.ElapsedMilliseconds, ex);
+            await TrackErrorMetricAsync("set_batch", sw.ElapsedMilliseconds, ex);
             activity?.SetStatus(ActivityStatusCode.Error, ex.Message);
             throw;
         }
@@ -218,10 +229,9 @@ public class InstrumentedGhostData : IGhostData
     {
         ThrowIfDisposed();
 
-        var keysList = keys as List<string> ?? keys.ToList();
-
+        var keysList = keys.ToList();
         using var activity = StartActivity("GhostData.DeleteBatchAsync");
-        activity?.SetTag("keys_count", keysList.Count);
+        activity?.SetTag("key_count", keysList.Count);
 
         var sw = Stopwatch.StartNew();
         try
@@ -229,7 +239,25 @@ public class InstrumentedGhostData : IGhostData
             var result = await _inner.DeleteBatchAsync(keysList, ct);
 
             sw.Stop();
-            RecordBatchSuccess("delete_batch", keysList.Count, sw.ElapsedMilliseconds);
+            await TrackSuccessMetricAsync("delete_batch", sw.ElapsedMilliseconds);
+
+            // Track batch size and result as separate metrics
+            await _metrics.TrackMetricAsync(new MetricValue
+            {
+                Name = "ghost.data.delete_batch.size",
+                Value = keysList.Count,
+                Tags = new Dictionary<string, string> { ["operation"] = "delete_batch" },
+                Timestamp = DateTime.UtcNow
+            });
+
+            await _metrics.TrackMetricAsync(new MetricValue
+            {
+                Name = "ghost.data.delete_batch.deleted_count",
+                Value = result,
+                Tags = new Dictionary<string, string> { ["operation"] = "delete_batch" },
+                Timestamp = DateTime.UtcNow
+            });
+
             activity?.SetTag("deleted_count", result);
 
             return result;
@@ -237,15 +265,15 @@ public class InstrumentedGhostData : IGhostData
         catch (Exception ex)
         {
             sw.Stop();
-            RecordBatchError("delete_batch", keysList.Count, sw.ElapsedMilliseconds, ex);
+            await TrackErrorMetricAsync("delete_batch", sw.ElapsedMilliseconds, ex);
             activity?.SetStatus(ActivityStatusCode.Error, ex.Message);
             throw;
         }
     }
 
-        #endregion
+    #endregion
 
-        #region SQL Operations
+    #region SQL Operations
 
     /// <inheritdoc />
     public async Task<T?> QuerySingleAsync<T>(string sql, object? param = null, CancellationToken ct = default)
@@ -263,7 +291,7 @@ public class InstrumentedGhostData : IGhostData
             var result = await _inner.QuerySingleAsync<T>(sql, param, ct);
 
             sw.Stop();
-            RecordSuccess("query_single", sw.ElapsedMilliseconds);
+            await TrackSuccessMetricAsync("query_single", sw.ElapsedMilliseconds);
             activity?.SetTag("found", result != null);
 
             return result;
@@ -271,7 +299,7 @@ public class InstrumentedGhostData : IGhostData
         catch (Exception ex)
         {
             sw.Stop();
-            RecordError("query_single", sw.ElapsedMilliseconds, ex);
+            await TrackErrorMetricAsync("query_single", sw.ElapsedMilliseconds, ex);
             activity?.SetStatus(ActivityStatusCode.Error, ex.Message);
             throw;
         }
@@ -294,7 +322,17 @@ public class InstrumentedGhostData : IGhostData
             var resultList = result as ICollection<T> ?? result.ToList();
 
             sw.Stop();
-            RecordSuccess("query", sw.ElapsedMilliseconds);
+            await TrackSuccessMetricAsync("query", sw.ElapsedMilliseconds);
+
+            // Track result count as a separate metric
+            await _metrics.TrackMetricAsync(new MetricValue
+            {
+                Name = "ghost.data.query.result_count",
+                Value = resultList.Count,
+                Tags = new Dictionary<string, string> { ["operation"] = "query" },
+                Timestamp = DateTime.UtcNow
+            });
+
             activity?.SetTag("result_count", resultList.Count);
 
             return resultList;
@@ -302,7 +340,7 @@ public class InstrumentedGhostData : IGhostData
         catch (Exception ex)
         {
             sw.Stop();
-            RecordError("query", sw.ElapsedMilliseconds, ex);
+            await TrackErrorMetricAsync("query", sw.ElapsedMilliseconds, ex);
             activity?.SetStatus(ActivityStatusCode.Error, ex.Message);
             throw;
         }
@@ -323,7 +361,17 @@ public class InstrumentedGhostData : IGhostData
             var result = await _inner.ExecuteAsync(sql, param, ct);
 
             sw.Stop();
-            RecordSuccess("execute", sw.ElapsedMilliseconds);
+            await TrackSuccessMetricAsync("execute", sw.ElapsedMilliseconds);
+
+            // Track rows affected as a separate metric
+            await _metrics.TrackMetricAsync(new MetricValue
+            {
+                Name = "ghost.data.execute.rows_affected",
+                Value = result,
+                Tags = new Dictionary<string, string> { ["operation"] = "execute" },
+                Timestamp = DateTime.UtcNow
+            });
+
             activity?.SetTag("rows_affected", result);
 
             return result;
@@ -331,7 +379,7 @@ public class InstrumentedGhostData : IGhostData
         catch (Exception ex)
         {
             sw.Stop();
-            RecordError("execute", sw.ElapsedMilliseconds, ex);
+            await TrackErrorMetricAsync("execute", sw.ElapsedMilliseconds, ex);
             activity?.SetStatus(ActivityStatusCode.Error, ex.Message);
             throw;
         }
@@ -342,10 +390,9 @@ public class InstrumentedGhostData : IGhostData
     {
         ThrowIfDisposed();
 
-        var commandsList = commands as List<(string sql, object? param)> ?? commands.ToList();
-
+        var commandsList = commands.ToList();
         using var activity = StartActivity("GhostData.ExecuteBatchAsync");
-        activity?.SetTag("commands_count", commandsList.Count);
+        activity?.SetTag("command_count", commandsList.Count);
 
         var sw = Stopwatch.StartNew();
         try
@@ -353,7 +400,25 @@ public class InstrumentedGhostData : IGhostData
             var result = await _inner.ExecuteBatchAsync(commandsList, ct);
 
             sw.Stop();
-            RecordBatchSuccess("execute_batch", commandsList.Count, sw.ElapsedMilliseconds);
+            await TrackSuccessMetricAsync("execute_batch", sw.ElapsedMilliseconds);
+
+            // Track batch size and result as separate metrics
+            await _metrics.TrackMetricAsync(new MetricValue
+            {
+                Name = "ghost.data.execute_batch.size",
+                Value = commandsList.Count,
+                Tags = new Dictionary<string, string> { ["operation"] = "execute_batch" },
+                Timestamp = DateTime.UtcNow
+            });
+
+            await _metrics.TrackMetricAsync(new MetricValue
+            {
+                Name = "ghost.data.execute_batch.rows_affected",
+                Value = result,
+                Tags = new Dictionary<string, string> { ["operation"] = "execute_batch" },
+                Timestamp = DateTime.UtcNow
+            });
+
             activity?.SetTag("rows_affected", result);
 
             return result;
@@ -361,15 +426,15 @@ public class InstrumentedGhostData : IGhostData
         catch (Exception ex)
         {
             sw.Stop();
-            RecordBatchError("execute_batch", commandsList.Count, sw.ElapsedMilliseconds, ex);
+            await TrackErrorMetricAsync("execute_batch", sw.ElapsedMilliseconds, ex);
             activity?.SetStatus(ActivityStatusCode.Error, ex.Message);
             throw;
         }
     }
 
-        #endregion
+    #endregion
 
-        #region Transaction Support
+    #region Transaction Support
 
     /// <inheritdoc />
     public async Task<IGhostTransaction> BeginTransactionAsync(CancellationToken ct = default)
@@ -384,7 +449,7 @@ public class InstrumentedGhostData : IGhostData
             var transaction = await _inner.BeginTransactionAsync(ct);
 
             sw.Stop();
-            RecordSuccess("begin_transaction", sw.ElapsedMilliseconds);
+            await TrackSuccessMetricAsync("begin_transaction", sw.ElapsedMilliseconds);
 
             // Wrap the transaction with instrumentation
             return new InstrumentedGhostTransaction(transaction, _metrics, _logger);
@@ -392,15 +457,15 @@ public class InstrumentedGhostData : IGhostData
         catch (Exception ex)
         {
             sw.Stop();
-            RecordError("begin_transaction", sw.ElapsedMilliseconds, ex);
+            await TrackErrorMetricAsync("begin_transaction", sw.ElapsedMilliseconds, ex);
             activity?.SetStatus(ActivityStatusCode.Error, ex.Message);
             throw;
         }
     }
 
-        #endregion
+    #endregion
 
-        #region Schema Operations
+    #region Schema Operations
 
     /// <inheritdoc />
     public async Task<bool> TableExistsAsync(string tableName, CancellationToken ct = default)
@@ -416,7 +481,7 @@ public class InstrumentedGhostData : IGhostData
             var result = await _inner.TableExistsAsync(tableName, ct);
 
             sw.Stop();
-            RecordSuccess("table_exists", sw.ElapsedMilliseconds);
+            await TrackSuccessMetricAsync("table_exists", sw.ElapsedMilliseconds);
             activity?.SetTag("exists", result);
 
             return result;
@@ -424,7 +489,7 @@ public class InstrumentedGhostData : IGhostData
         catch (Exception ex)
         {
             sw.Stop();
-            RecordError("table_exists", sw.ElapsedMilliseconds, ex);
+            await TrackErrorMetricAsync("table_exists", sw.ElapsedMilliseconds, ex);
             activity?.SetStatus(ActivityStatusCode.Error, ex.Message);
             throw;
         }
@@ -444,7 +509,17 @@ public class InstrumentedGhostData : IGhostData
             var resultList = result as ICollection<string> ?? result.ToList();
 
             sw.Stop();
-            RecordSuccess("get_table_names", sw.ElapsedMilliseconds);
+            await TrackSuccessMetricAsync("get_table_names", sw.ElapsedMilliseconds);
+
+            // Track table count as a separate metric
+            await _metrics.TrackMetricAsync(new MetricValue
+            {
+                Name = "ghost.data.get_table_names.table_count",
+                Value = resultList.Count,
+                Tags = new Dictionary<string, string> { ["operation"] = "get_table_names" },
+                Timestamp = DateTime.UtcNow
+            });
+
             activity?.SetTag("table_count", resultList.Count);
 
             return resultList;
@@ -452,15 +527,15 @@ public class InstrumentedGhostData : IGhostData
         catch (Exception ex)
         {
             sw.Stop();
-            RecordError("get_table_names", sw.ElapsedMilliseconds, ex);
+            await TrackErrorMetricAsync("get_table_names", sw.ElapsedMilliseconds, ex);
             activity?.SetStatus(ActivityStatusCode.Error, ex.Message);
             throw;
         }
     }
 
-        #endregion
+    #endregion
 
-        #region Helper Methods
+    #region Helper Methods
 
     /// <summary>
     /// Starts a new activity for tracing.
@@ -475,14 +550,29 @@ public class InstrumentedGhostData : IGhostData
     }
 
     /// <summary>
-    /// Records success metrics for an operation.
+    /// Tracks success metrics for an operation.
     /// </summary>
     /// <param name="operation">The name of the operation.</param>
     /// <param name="elapsedMs">The elapsed time in milliseconds.</param>
-    private void RecordSuccess(string operation, long elapsedMs)
+    private async Task TrackSuccessMetricAsync(string operation, long elapsedMs)
     {
-        _metrics.RecordLatency($"ghost.data.{operation}", elapsedMs);
-        _metrics.IncrementCounter($"ghost.data.{operation}.success");
+        // Track latency metric
+        await _metrics.TrackMetricAsync(new MetricValue
+        {
+            Name = $"ghost.data.{operation}.latency",
+            Value = elapsedMs,
+            Tags = new Dictionary<string, string> { ["operation"] = operation, ["status"] = "success" },
+            Timestamp = DateTime.UtcNow
+        });
+
+        // Track success count metric
+        await _metrics.TrackMetricAsync(new MetricValue
+        {
+            Name = $"ghost.data.{operation}.count",
+            Value = 1, // Increment by 1
+            Tags = new Dictionary<string, string> { ["operation"] = operation, ["status"] = "success" },
+            Timestamp = DateTime.UtcNow
+        });
 
         if (elapsedMs > 100)
         {
@@ -492,55 +582,37 @@ public class InstrumentedGhostData : IGhostData
     }
 
     /// <summary>
-    /// Records error metrics for an operation.
+    /// Tracks error metrics for an operation.
     /// </summary>
     /// <param name="operation">The name of the operation.</param>
     /// <param name="elapsedMs">The elapsed time in milliseconds.</param>
     /// <param name="ex">The exception that occurred.</param>
-    private void RecordError(string operation, long elapsedMs, Exception ex)
+    private async Task TrackErrorMetricAsync(string operation, long elapsedMs, Exception ex)
     {
-        _metrics.RecordLatency($"ghost.data.{operation}", elapsedMs);
-        _metrics.IncrementCounter($"ghost.data.{operation}.error");
+        // Track latency metric
+        await _metrics.TrackMetricAsync(new MetricValue
+        {
+            Name = $"ghost.data.{operation}.latency",
+            Value = elapsedMs,
+            Tags = new Dictionary<string, string> { ["operation"] = operation, ["status"] = "error" },
+            Timestamp = DateTime.UtcNow
+        });
+
+        // Track error count metric
+        await _metrics.TrackMetricAsync(new MetricValue
+        {
+            Name = $"ghost.data.{operation}.count",
+            Value = 1, // Increment by 1
+            Tags = new Dictionary<string, string> {
+                ["operation"] = operation,
+                ["status"] = "error",
+                ["error_type"] = ex.GetType().Name
+            },
+            Timestamp = DateTime.UtcNow
+        });
 
         _logger.LogError(ex, "{Operation} operation failed after {ElapsedMs}ms",
                 operation, elapsedMs);
-    }
-
-    /// <summary>
-    /// Records success metrics for a batch operation.
-    /// </summary>
-    /// <param name="operation">The name of the operation.</param>
-    /// <param name="batchSize">The size of the batch.</param>
-    /// <param name="elapsedMs">The elapsed time in milliseconds.</param>
-    private void RecordBatchSuccess(string operation, int batchSize, long elapsedMs)
-    {
-        _metrics.RecordLatency($"ghost.data.{operation}", elapsedMs);
-        _metrics.IncrementCounter($"ghost.data.{operation}.success");
-        _metrics.RecordGauge($"ghost.data.{operation}.batch_size", batchSize);
-        _metrics.RecordLatency($"ghost.data.{operation}.per_item", elapsedMs / Math.Max(1, batchSize));
-
-        if (elapsedMs > 500 || (batchSize > 0 && elapsedMs / batchSize > 20))
-        {
-            _logger.LogDebug("Slow {Operation} operation: {ElapsedMs}ms for {BatchSize} items ({PerItem}ms per item)",
-                    operation, elapsedMs, batchSize, elapsedMs / Math.Max(1, batchSize));
-        }
-    }
-
-    /// <summary>
-    /// Records error metrics for a batch operation.
-    /// </summary>
-    /// <param name="operation">The name of the operation.</param>
-    /// <param name="batchSize">The size of the batch.</param>
-    /// <param name="elapsedMs">The elapsed time in milliseconds.</param>
-    /// <param name="ex">The exception that occurred.</param>
-    private void RecordBatchError(string operation, int batchSize, long elapsedMs, Exception ex)
-    {
-        _metrics.RecordLatency($"ghost.data.{operation}", elapsedMs);
-        _metrics.IncrementCounter($"ghost.data.{operation}.error");
-        _metrics.RecordGauge($"ghost.data.{operation}.batch_size", batchSize);
-
-        _logger.LogError(ex, "{Operation} operation failed after {ElapsedMs}ms for {BatchSize} items",
-                operation, elapsedMs, batchSize);
     }
 
     /// <summary>
@@ -563,9 +635,9 @@ public class InstrumentedGhostData : IGhostData
             throw new ObjectDisposedException(nameof(InstrumentedGhostData));
     }
 
-        #endregion
+    #endregion
 
-        #region IAsyncDisposable
+    #region IAsyncDisposable
 
     /// <inheritdoc />
     public async ValueTask DisposeAsync()
@@ -577,9 +649,9 @@ public class InstrumentedGhostData : IGhostData
         await _inner.DisposeAsync();
     }
 
-        #endregion
+    #endregion
 
-        #region Instrumented Transaction Implementation
+    #region Instrumented Transaction Implementation
 
     /// <summary>
     /// Wraps a transaction with instrumentation.
@@ -616,13 +688,13 @@ public class InstrumentedGhostData : IGhostData
                 await _inner.CommitAsync(ct);
 
                 sw.Stop();
-                RecordSuccess("transaction_commit", sw.ElapsedMilliseconds);
-                RecordSuccess("transaction_duration", _transactionTimer.ElapsedMilliseconds);
+                await TrackSuccessMetricAsync("transaction_commit", sw.ElapsedMilliseconds);
+                await TrackSuccessMetricAsync("transaction_duration", _transactionTimer.ElapsedMilliseconds);
             }
             catch (Exception ex)
             {
                 sw.Stop();
-                RecordError("transaction_commit", sw.ElapsedMilliseconds, ex);
+                await TrackErrorMetricAsync("transaction_commit", sw.ElapsedMilliseconds, ex);
                 activity?.SetStatus(ActivityStatusCode.Error, ex.Message);
                 throw;
             }
@@ -640,18 +712,27 @@ public class InstrumentedGhostData : IGhostData
                 await _inner.RollbackAsync(ct);
 
                 sw.Stop();
-                RecordSuccess("transaction_rollback", sw.ElapsedMilliseconds);
-                _metrics.IncrementCounter("ghost.data.transaction_rollback");
+                await TrackSuccessMetricAsync("transaction_rollback", sw.ElapsedMilliseconds);
+
+                // Add a specific rollback event counter
+                await _metrics.TrackMetricAsync(new MetricValue
+                {
+                    Name = "ghost.data.transaction_rollback.count",
+                    Value = 1,
+                    Tags = new Dictionary<string, string> { ["operation"] = "transaction_rollback" },
+                    Timestamp = DateTime.UtcNow
+                });
             }
             catch (Exception ex)
             {
                 sw.Stop();
-                RecordError("transaction_rollback", sw.ElapsedMilliseconds, ex);
+                await TrackErrorMetricAsync("transaction_rollback", sw.ElapsedMilliseconds, ex);
                 activity?.SetStatus(ActivityStatusCode.Error, ex.Message);
                 throw;
             }
         }
 
+        /// <inheritdoc />
         public async Task<T?> QuerySingleAsync<T>(string sql, object? param = null, CancellationToken ct = default)
         {
             ThrowIfDisposed();
@@ -659,6 +740,7 @@ public class InstrumentedGhostData : IGhostData
             using var activity = StartActivity("GhostTransaction.QuerySingleAsync");
             activity?.SetTag("sql_hash", GetSqlHash(sql));
             activity?.SetTag("type", typeof(T).Name);
+            activity?.SetTag("has_params", param != null);
 
             var sw = Stopwatch.StartNew();
             try
@@ -666,7 +748,7 @@ public class InstrumentedGhostData : IGhostData
                 var result = await _inner.QuerySingleAsync<T>(sql, param, ct);
 
                 sw.Stop();
-                RecordSuccess("transaction_query_single", sw.ElapsedMilliseconds);
+                await TrackSuccessMetricAsync("transaction_query_single", sw.ElapsedMilliseconds);
                 activity?.SetTag("found", result != null);
 
                 return result;
@@ -674,12 +756,13 @@ public class InstrumentedGhostData : IGhostData
             catch (Exception ex)
             {
                 sw.Stop();
-                RecordError("transaction_query_single", sw.ElapsedMilliseconds, ex);
+                await TrackErrorMetricAsync("transaction_query_single", sw.ElapsedMilliseconds, ex);
                 activity?.SetStatus(ActivityStatusCode.Error, ex.Message);
                 throw;
             }
         }
 
+        /// <inheritdoc />
         public async Task<IEnumerable<T>> QueryAsync<T>(string sql, object? param = null, CancellationToken ct = default)
         {
             ThrowIfDisposed();
@@ -687,6 +770,7 @@ public class InstrumentedGhostData : IGhostData
             using var activity = StartActivity("GhostTransaction.QueryAsync");
             activity?.SetTag("sql_hash", GetSqlHash(sql));
             activity?.SetTag("type", typeof(T).Name);
+            activity?.SetTag("has_params", param != null);
 
             var sw = Stopwatch.StartNew();
             try
@@ -695,7 +779,17 @@ public class InstrumentedGhostData : IGhostData
                 var resultList = result as ICollection<T> ?? result.ToList();
 
                 sw.Stop();
-                RecordSuccess("transaction_query", sw.ElapsedMilliseconds);
+                await TrackSuccessMetricAsync("transaction_query", sw.ElapsedMilliseconds);
+
+                // Track result count as a separate metric
+                await _metrics.TrackMetricAsync(new MetricValue
+                {
+                    Name = "ghost.data.transaction_query.result_count",
+                    Value = resultList.Count,
+                    Tags = new Dictionary<string, string> { ["operation"] = "transaction_query" },
+                    Timestamp = DateTime.UtcNow
+                });
+
                 activity?.SetTag("result_count", resultList.Count);
 
                 return resultList;
@@ -703,18 +797,20 @@ public class InstrumentedGhostData : IGhostData
             catch (Exception ex)
             {
                 sw.Stop();
-                RecordError("transaction_query", sw.ElapsedMilliseconds, ex);
+                await TrackErrorMetricAsync("transaction_query", sw.ElapsedMilliseconds, ex);
                 activity?.SetStatus(ActivityStatusCode.Error, ex.Message);
                 throw;
             }
         }
 
+        /// <inheritdoc />
         public async Task<int> ExecuteAsync(string sql, object? param = null, CancellationToken ct = default)
         {
             ThrowIfDisposed();
 
             using var activity = StartActivity("GhostTransaction.ExecuteAsync");
             activity?.SetTag("sql_hash", GetSqlHash(sql));
+            activity?.SetTag("has_params", param != null);
 
             var sw = Stopwatch.StartNew();
             try
@@ -722,7 +818,17 @@ public class InstrumentedGhostData : IGhostData
                 var result = await _inner.ExecuteAsync(sql, param, ct);
 
                 sw.Stop();
-                RecordSuccess("transaction_execute", sw.ElapsedMilliseconds);
+                await TrackSuccessMetricAsync("transaction_execute", sw.ElapsedMilliseconds);
+
+                // Track rows affected as a separate metric
+                await _metrics.TrackMetricAsync(new MetricValue
+                {
+                    Name = "ghost.data.transaction_execute.rows_affected",
+                    Value = result,
+                    Tags = new Dictionary<string, string> { ["operation"] = "transaction_execute" },
+                    Timestamp = DateTime.UtcNow
+                });
+
                 activity?.SetTag("rows_affected", result);
 
                 return result;
@@ -730,20 +836,20 @@ public class InstrumentedGhostData : IGhostData
             catch (Exception ex)
             {
                 sw.Stop();
-                RecordError("transaction_execute", sw.ElapsedMilliseconds, ex);
+                await TrackErrorMetricAsync("transaction_execute", sw.ElapsedMilliseconds, ex);
                 activity?.SetStatus(ActivityStatusCode.Error, ex.Message);
                 throw;
             }
         }
 
+        /// <inheritdoc />
         public async Task<int> ExecuteBatchAsync(IEnumerable<(string sql, object? param)> commands, CancellationToken ct = default)
         {
             ThrowIfDisposed();
 
-            var commandsList = commands as List<(string sql, object? param)> ?? commands.ToList();
-
+            var commandsList = commands.ToList();
             using var activity = StartActivity("GhostTransaction.ExecuteBatchAsync");
-            activity?.SetTag("commands_count", commandsList.Count);
+            activity?.SetTag("command_count", commandsList.Count);
 
             var sw = Stopwatch.StartNew();
             try
@@ -751,7 +857,25 @@ public class InstrumentedGhostData : IGhostData
                 var result = await _inner.ExecuteBatchAsync(commandsList, ct);
 
                 sw.Stop();
-                RecordBatchSuccess("transaction_execute_batch", commandsList.Count, sw.ElapsedMilliseconds);
+                await TrackSuccessMetricAsync("transaction_execute_batch", sw.ElapsedMilliseconds);
+
+                // Track batch size and result as separate metrics
+                await _metrics.TrackMetricAsync(new MetricValue
+                {
+                    Name = "ghost.data.transaction_execute_batch.size",
+                    Value = commandsList.Count,
+                    Tags = new Dictionary<string, string> { ["operation"] = "transaction_execute_batch" },
+                    Timestamp = DateTime.UtcNow
+                });
+
+                await _metrics.TrackMetricAsync(new MetricValue
+                {
+                    Name = "ghost.data.transaction_execute_batch.rows_affected",
+                    Value = result,
+                    Tags = new Dictionary<string, string> { ["operation"] = "transaction_execute_batch" },
+                    Timestamp = DateTime.UtcNow
+                });
+
                 activity?.SetTag("rows_affected", result);
 
                 return result;
@@ -759,7 +883,7 @@ public class InstrumentedGhostData : IGhostData
             catch (Exception ex)
             {
                 sw.Stop();
-                RecordBatchError("transaction_execute_batch", commandsList.Count, sw.ElapsedMilliseconds, ex);
+                await TrackErrorMetricAsync("transaction_execute_batch", sw.ElapsedMilliseconds, ex);
                 activity?.SetStatus(ActivityStatusCode.Error, ex.Message);
                 throw;
             }
@@ -777,6 +901,15 @@ public class InstrumentedGhostData : IGhostData
             {
                 _logger.LogWarning("Long-running transaction: {ElapsedMs}ms",
                         _transactionTimer.ElapsedMilliseconds);
+
+                // Track long-running transaction as a metric
+                await _metrics.TrackMetricAsync(new MetricValue
+                {
+                    Name = "ghost.data.transaction_long_running",
+                    Value = _transactionTimer.ElapsedMilliseconds,
+                    Tags = new Dictionary<string, string> { ["threshold"] = "exceeded" },
+                    Timestamp = DateTime.UtcNow
+                });
             }
 
             _transactionTimer.Stop();
@@ -796,14 +929,40 @@ public class InstrumentedGhostData : IGhostData
         }
 
         /// <summary>
-        /// Records success metrics for an operation.
+        /// Generates a simple hash for a SQL query for logging purposes.
+        /// </summary>
+        /// <param name="sql">The SQL query.</param>
+        /// <returns>A hash code for the SQL query.</returns>
+        private static string GetSqlHash(string sql)
+        {
+            if (string.IsNullOrEmpty(sql)) return "empty";
+            return Math.Abs(sql.GetHashCode()).ToString("X8");
+        }
+
+        /// <summary>
+        /// Tracks success metrics for an operation.
         /// </summary>
         /// <param name="operation">The name of the operation.</param>
         /// <param name="elapsedMs">The elapsed time in milliseconds.</param>
-        private void RecordSuccess(string operation, long elapsedMs)
+        private async Task TrackSuccessMetricAsync(string operation, long elapsedMs)
         {
-            _metrics.RecordLatency($"ghost.data.{operation}", elapsedMs);
-            _metrics.IncrementCounter($"ghost.data.{operation}.success");
+            // Track latency metric
+            await _metrics.TrackMetricAsync(new MetricValue
+            {
+                Name = $"ghost.data.{operation}.latency",
+                Value = elapsedMs,
+                Tags = new Dictionary<string, string> { ["operation"] = operation, ["status"] = "success" },
+                Timestamp = DateTime.UtcNow
+            });
+
+            // Track success count metric
+            await _metrics.TrackMetricAsync(new MetricValue
+            {
+                Name = $"ghost.data.{operation}.count",
+                Value = 1, // Increment by 1
+                Tags = new Dictionary<string, string> { ["operation"] = operation, ["status"] = "success" },
+                Timestamp = DateTime.UtcNow
+            });
 
             if (elapsedMs > 100)
             {
@@ -813,66 +972,37 @@ public class InstrumentedGhostData : IGhostData
         }
 
         /// <summary>
-        /// Records error metrics for an operation.
+        /// Tracks error metrics for an operation.
         /// </summary>
         /// <param name="operation">The name of the operation.</param>
         /// <param name="elapsedMs">The elapsed time in milliseconds.</param>
         /// <param name="ex">The exception that occurred.</param>
-        private void RecordError(string operation, long elapsedMs, Exception ex)
+        private async Task TrackErrorMetricAsync(string operation, long elapsedMs, Exception ex)
         {
-            _metrics.RecordLatency($"ghost.data.{operation}", elapsedMs);
-            _metrics.IncrementCounter($"ghost.data.{operation}.error");
+            // Track latency metric
+            await _metrics.TrackMetricAsync(new MetricValue
+            {
+                Name = $"ghost.data.{operation}.latency",
+                Value = elapsedMs,
+                Tags = new Dictionary<string, string> { ["operation"] = operation, ["status"] = "error" },
+                Timestamp = DateTime.UtcNow
+            });
+
+            // Track error count metric
+            await _metrics.TrackMetricAsync(new MetricValue
+            {
+                Name = $"ghost.data.{operation}.count",
+                Value = 1, // Increment by 1
+                Tags = new Dictionary<string, string> {
+                    ["operation"] = operation,
+                    ["status"] = "error",
+                    ["error_type"] = ex.GetType().Name
+                },
+                Timestamp = DateTime.UtcNow
+            });
 
             _logger.LogError(ex, "{Operation} operation failed after {ElapsedMs}ms",
                     operation, elapsedMs);
-        }
-
-        /// <summary>
-        /// Records success metrics for a batch operation.
-        /// </summary>
-        /// <param name="operation">The name of the operation.</param>
-        /// <param name="batchSize">The size of the batch.</param>
-        /// <param name="elapsedMs">The elapsed time in milliseconds.</param>
-        private void RecordBatchSuccess(string operation, int batchSize, long elapsedMs)
-        {
-            _metrics.RecordLatency($"ghost.data.{operation}", elapsedMs);
-            _metrics.IncrementCounter($"ghost.data.{operation}.success");
-            _metrics.RecordGauge($"ghost.data.{operation}.batch_size", batchSize);
-            _metrics.RecordLatency($"ghost.data.{operation}.per_item", elapsedMs / Math.Max(1, batchSize));
-
-            if (elapsedMs > 500 || (batchSize > 0 && elapsedMs / batchSize > 20))
-            {
-                _logger.LogDebug("Slow {Operation} operation: {ElapsedMs}ms for {BatchSize} items ({PerItem}ms per item)",
-                        operation, elapsedMs, batchSize, elapsedMs / Math.Max(1, batchSize));
-            }
-        }
-
-        /// <summary>
-        /// Records error metrics for a batch operation.
-        /// </summary>
-        /// <param name="operation">The name of the operation.</param>
-        /// <param name="batchSize">The size of the batch.</param>
-        /// <param name="elapsedMs">The elapsed time in milliseconds.</param>
-        /// <param name="ex">The exception that occurred.</param>
-        private void RecordBatchError(string operation, int batchSize, long elapsedMs, Exception ex)
-        {
-            _metrics.RecordLatency($"ghost.data.{operation}", elapsedMs);
-            _metrics.IncrementCounter($"ghost.data.{operation}.error");
-            _metrics.RecordGauge($"ghost.data.{operation}.batch_size", batchSize);
-
-            _logger.LogError(ex, "{Operation} operation failed after {ElapsedMs}ms for {BatchSize} items",
-                    operation, elapsedMs, batchSize);
-        }
-
-        /// <summary>
-        /// Generates a simple hash for a SQL query for logging purposes.
-        /// </summary>
-        /// <param name="sql">The SQL query.</param>
-        /// <returns>A hash code for the SQL query.</returns>
-        private static string GetSqlHash(string sql)
-        {
-            if (string.IsNullOrEmpty(sql)) return "empty";
-            return Math.Abs(sql.GetHashCode()).ToString("X8");
         }
 
         /// <summary>
@@ -885,5 +1015,5 @@ public class InstrumentedGhostData : IGhostData
         }
     }
 
-        #endregion
+    #endregion
 }

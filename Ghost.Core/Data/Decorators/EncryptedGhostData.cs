@@ -49,9 +49,6 @@ public class EncryptedGhostData : IGhostData
     }
 
     /// <inheritdoc />
-    public DatabaseType DatabaseType => _inner.DatabaseType;
-
-    /// <inheritdoc />
     public IDatabaseClient GetDatabaseClient() => _inner.GetDatabaseClient();
 
         #region Key-Value Operations

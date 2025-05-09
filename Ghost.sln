@@ -9,8 +9,6 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Ghost.SDK", "Ghost.SDK\Ghos
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Ghost.Logger", "Ghost.Logger\Ghost.Logger.csproj", "{F144E060-C648-474A-A438-B28B25F5A8C1}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Ghost.Postgres", "Ghost.Postgres\Ghost.Postgres.csproj", "{BBC3450B-4B97-4F5D-A31C-780DEFA54A46}"
-EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Ghost.Father", "Ghost.Father\Ghost.Father.csproj", "{5344F332-0AF8-460E-BDCF-65FEA49B2FCF}"
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Ghost.Test", "Ghost.Test\Ghost.Test.csproj", "{2D918499-C1E3-4DD2-A5A7-DB365BECAC76}"
@@ -36,10 +34,6 @@ Global
 		{F144E060-C648-474A-A438-B28B25F5A8C1}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{F144E060-C648-474A-A438-B28B25F5A8C1}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{F144E060-C648-474A-A438-B28B25F5A8C1}.Release|Any CPU.Build.0 = Release|Any CPU
-		{BBC3450B-4B97-4F5D-A31C-780DEFA54A46}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
-		{BBC3450B-4B97-4F5D-A31C-780DEFA54A46}.Debug|Any CPU.Build.0 = Debug|Any CPU
-		{BBC3450B-4B97-4F5D-A31C-780DEFA54A46}.Release|Any CPU.ActiveCfg = Release|Any CPU
-		{BBC3450B-4B97-4F5D-A31C-780DEFA54A46}.Release|Any CPU.Build.0 = Release|Any CPU
 		{5344F332-0AF8-460E-BDCF-65FEA49B2FCF}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
 		{5344F332-0AF8-460E-BDCF-65FEA49B2FCF}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{5344F332-0AF8-460E-BDCF-65FEA49B2FCF}.Release|Any CPU.ActiveCfg = Release|Any CPU

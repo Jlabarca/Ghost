@@ -34,7 +34,7 @@ public class ProcessManager : IAsyncDisposable
 
     public ProcessManager(ServiceCollection services)
     {
-        using var serviceProvider = services.BuildServiceProvider();
+        var serviceProvider = services.BuildServiceProvider();
         _bus = serviceProvider.GetRequiredService<IGhostBus>();
         _data = serviceProvider.GetRequiredService<IGhostData>();
         _config = serviceProvider.GetRequiredService<GhostConfig>();
@@ -51,7 +51,7 @@ public class ProcessManager : IAsyncDisposable
         try
         {
             // Initialize schema
-            //await _data.InitializeSchemaAsync();
+            //await _stateManager.InitializeAsync();//InitializeSchemaAsync();
 
             // Initialize state manager
             await _stateManager.InitializeAsync();
@@ -83,6 +83,211 @@ public class ProcessManager : IAsyncDisposable
             _lock.Release();
         }
     }
+    private async Task InitializeSchemaAsync()
+{
+    try
+    {
+        // Check if schema version table exists
+        var schemaVersionTableExists = await _data.TableExistsAsync("ghost_schema_version");
+
+        if (!schemaVersionTableExists)
+        {
+            // Create initial schema
+            await CreateInitialSchemaAsync();
+            return;
+        }
+
+        // Check current schema version
+        var currentVersion = await _data.QuerySingleAsync<int>(@"
+            SELECT COALESCE(MAX(version), 0) FROM ghost_schema_version");
+
+        // Apply migrations sequentially
+        if (currentVersion < 2)
+        {
+            await MigrateToVersion2Async();
+        }
+
+        if (currentVersion < 3)
+        {
+            await MigrateToVersion3Async();
+        }
+
+        L.LogInfo($"PostgreSQL schema is up to date (version {Math.Max(currentVersion, 3)})");
+    }
+    catch (Exception ex)
+    {
+        L.LogError(ex, "Failed to initialize PostgreSQL schema");
+        throw new GhostException("Failed to initialize database schema", ex, ErrorCode.StorageConfigurationFailed);
+    }
+}
+
+private async Task CreateInitialSchemaAsync()
+{
+    // Begin transaction for atomic schema creation
+    await using var transaction = await _data.BeginTransactionAsync();
+    try
+    {
+        // Create schema version table
+        await transaction.ExecuteAsync(@"
+            CREATE TABLE IF NOT EXISTS ghost_schema_version (
+                version INTEGER NOT NULL,
+                applied_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                description TEXT,
+                PRIMARY KEY (version)
+            )");
+
+        // Create processes table
+        await transaction.ExecuteAsync(@"
+            CREATE TABLE IF NOT EXISTS processes (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                type TEXT NOT NULL,
+                version TEXT NOT NULL,
+                executable_path TEXT NOT NULL,
+                arguments TEXT,
+                working_directory TEXT,
+                status TEXT NOT NULL,
+                start_time TIMESTAMP,
+                stop_time TIMESTAMP,
+                restart_count INTEGER NOT NULL DEFAULT 0,
+                last_error TEXT,
+                created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                last_seen TIMESTAMP
+            )");
+
+        // Create process metadata table
+        await transaction.ExecuteAsync(@"
+            CREATE TABLE IF NOT EXISTS process_metadata (
+                id SERIAL PRIMARY KEY,
+                process_id TEXT NOT NULL,
+                key TEXT NOT NULL,
+                value TEXT,
+                metadata_type TEXT NOT NULL,
+                UNIQUE(process_id, key, metadata_type),
+                FOREIGN KEY (process_id) REFERENCES processes (id) ON DELETE CASCADE
+            )");
+
+        // Create process metrics table
+        await transaction.ExecuteAsync(@"
+            CREATE TABLE IF NOT EXISTS process_metrics (
+                id SERIAL PRIMARY KEY,
+                process_id TEXT NOT NULL,
+                timestamp TIMESTAMP NOT NULL,
+                cpu_percentage REAL,
+                memory_bytes BIGINT,
+                thread_count INTEGER,
+                network_in_bytes BIGINT,
+                network_out_bytes BIGINT,
+                disk_read_bytes BIGINT,
+                disk_write_bytes BIGINT,
+                handle_count INTEGER,
+                gc_total_memory BIGINT,
+                gen0_collections BIGINT,
+                gen1_collections BIGINT,
+                gen2_collections BIGINT,
+                FOREIGN KEY (process_id) REFERENCES processes (id) ON DELETE CASCADE
+            )");
+
+        // Create indexes for better performance
+        await transaction.ExecuteAsync(@"
+            CREATE INDEX IF NOT EXISTS idx_processes_status ON processes(status)");
+        await transaction.ExecuteAsync(@"
+            CREATE INDEX IF NOT EXISTS idx_process_metadata_process_id ON process_metadata(process_id)");
+        await transaction.ExecuteAsync(@"
+            CREATE INDEX IF NOT EXISTS idx_process_metrics_process_id_timestamp ON process_metrics(process_id, timestamp)");
+
+        // Record schema version
+        await transaction.ExecuteAsync(@"
+            INSERT INTO ghost_schema_version (version, description) 
+            VALUES (1, 'Initial schema creation')");
+
+        await transaction.CommitAsync();
+        L.LogInfo("PostgreSQL schema created (version 1)");
+    }
+    catch
+    {
+        await transaction.RollbackAsync();
+        throw;
+    }
+}
+
+private async Task MigrateToVersion2Async()
+{
+    await using var transaction = await _data.BeginTransactionAsync();
+    try
+    {
+        // Add process_health table
+        await transaction.ExecuteAsync(@"
+            CREATE TABLE IF NOT EXISTS process_health (
+                id SERIAL PRIMARY KEY,
+                process_id TEXT NOT NULL,
+                status TEXT NOT NULL,
+                message TEXT,
+                timestamp TIMESTAMP NOT NULL,
+                FOREIGN KEY (process_id) REFERENCES processes (id) ON DELETE CASCADE
+            )");
+
+        await transaction.ExecuteAsync(@"
+            CREATE INDEX IF NOT EXISTS idx_process_health_process_id_timestamp ON process_health(process_id, timestamp)");
+
+        // Record schema version
+        await transaction.ExecuteAsync(@"
+            INSERT INTO ghost_schema_version (version, description) 
+            VALUES (2, 'Added process_health table')");
+
+        await transaction.CommitAsync();
+        L.LogInfo("Schema migrated to version 2");
+    }
+    catch
+    {
+        await transaction.RollbackAsync();
+        throw;
+    }
+}
+
+private async Task MigrateToVersion3Async()
+{
+    await using var transaction = await _data.BeginTransactionAsync();
+    try
+    {
+        // Add process_state_log table
+        await transaction.ExecuteAsync(@"
+            CREATE TABLE IF NOT EXISTS process_state_log (
+                id SERIAL PRIMARY KEY,
+                process_id TEXT NOT NULL,
+                old_status TEXT,
+                new_status TEXT NOT NULL,
+                timestamp TIMESTAMP NOT NULL,
+                FOREIGN KEY (process_id) REFERENCES processes (id) ON DELETE CASCADE
+            )");
+
+        await transaction.ExecuteAsync(@"
+            CREATE INDEX IF NOT EXISTS idx_process_state_log_process_id_timestamp ON process_state_log(process_id, timestamp)");
+
+        // Add retention policy to process metrics
+        // PostgreSQL-specific - create a retention management function
+        await transaction.ExecuteAsync(@"
+            CREATE OR REPLACE FUNCTION trim_process_metrics() RETURNS void AS $$
+            BEGIN
+                DELETE FROM process_metrics
+                WHERE timestamp < NOW() - INTERVAL '7 days';
+            END;
+            $$ LANGUAGE plpgsql;");
+
+        // Record schema version
+        await transaction.ExecuteAsync(@"
+            INSERT INTO ghost_schema_version (version, description) 
+            VALUES (3, 'Added process_state_log table and metrics retention')");
+
+        await transaction.CommitAsync();
+        L.LogInfo("Schema migrated to version 3");
+    }
+    catch
+    {
+        await transaction.RollbackAsync();
+        throw;
+    }
+}
 
     private async Task SubscribeToSystemEventsAsync()
     {

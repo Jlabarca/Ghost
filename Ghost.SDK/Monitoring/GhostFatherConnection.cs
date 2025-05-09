@@ -1,6 +1,7 @@
 using Ghost.Core;
 using MemoryPack;
 using Ghost.Core.Data;
+using Ghost.Core.Data.Implementations;
 using System.Diagnostics;
 using Ghost.Core.Storage;
 using System.Threading.Channels;
@@ -107,7 +108,7 @@ namespace Ghost
                 var tempPath = Path.Combine(
                         Path.GetTempPath(), "ghost", "cache", Process.GetCurrentProcess().Id.ToString());
                 Directory.CreateDirectory(tempPath);
-                var cache = new LocalCache(tempPath);
+                var cache = new MemoryCache(G.GetLogger());
                 return new GhostBus(cache);
             }
             catch (Exception ex)

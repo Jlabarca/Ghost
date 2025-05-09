@@ -68,8 +68,8 @@ public static class CommandRegistry
             "monitor", "monitor --watch"),
         new(typeof(RemoveCommand), "remove", "Remove a Ghost app",
             "remove myapp"),
-        new(typeof(ValidateCommand), "validate", "Validate Ghost installation and configuration",
-            "validate", "validate --verbose", "validate --fix"),
+        // new(typeof(ValidateCommand), "validate", "Validate Ghost installation and configuration",
+        //     "validate", "validate --verbose", "validate --fix"),
         // new(typeof(UpdateSdkCommand), "updatesdk", "Build and deploy the Ghost SDK as NuGet packages",
         //         "updatesdk", "updatesdk --version 1.1.0", "updatesdk --local-feed ./packages")
     };

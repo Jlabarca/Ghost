@@ -1,6 +1,7 @@
 using Ghost.Core.Data;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using System.Runtime.CompilerServices;
 
 namespace Ghost.Core.Logging;
@@ -10,6 +11,7 @@ namespace Ghost.Core.Logging;
 /// </summary>
 public class NullGhostLogger : IGhostLogger
 {
+
   private static readonly NullGhostLogger _instance = new();
 
   public static NullGhostLogger Instance => _instance;
@@ -33,6 +35,11 @@ public class NullGhostLogger : IGhostLogger
   public void SetCache(ICache cache)
   {
     // Do nothing
+  }
+  public ILogger<T>? CreateLogger<T>()
+  {
+    // Return a null logger for the specified type
+    return new NullLogger<T>();
   }
 }
 

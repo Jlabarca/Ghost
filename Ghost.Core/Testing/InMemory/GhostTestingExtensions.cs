@@ -61,7 +61,7 @@ namespace Ghost.Core.Testing.InMemory
                 // Add encryption layer
                 if (useEncryptionLayer)
                 {
-                    data = new Data.Decorators.EncryptedGhostData(
+                    data = new EncryptedGhostData(
                         data,
                         Microsoft.Extensions.Options.Options.Create(new Configuration.SecurityConfiguration
                         {
@@ -69,13 +69,13 @@ namespace Ghost.Core.Testing.InMemory
                             EncryptionKey = Convert.ToBase64String(new byte[32] { 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32 }),
                             EncryptionIV = Convert.ToBase64String(new byte[16] { 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16 })
                         }),
-                        sp.GetRequiredService<ILogger<Data.Decorators.EncryptedGhostData>>());
+                        sp.GetRequiredService<ILogger<EncryptedGhostData>>());
                 }
                 
                 // Add caching layer
                 if (useCachingLayer)
                 {
-                    data = new Data.Decorators.CachedGhostData(
+                    data = new CachedGhostData(
                         data,
                         sp.GetRequiredService<ICache>(),
                         Microsoft.Extensions.Options.Options.Create(new Configuration.CachingConfiguration
@@ -84,7 +84,7 @@ namespace Ghost.Core.Testing.InMemory
                             DefaultL1Expiration = TimeSpan.FromMinutes(5),
                             DefaultL1SlidingExpiration = TimeSpan.FromMinutes(1)
                         }),
-                        sp.GetRequiredService<ILogger<Data.Decorators.CachedGhostData>>());
+                        sp.GetRequiredService<ILogger<CachedGhostData>>());
                 }
                 
                 // Add resilience layer
@@ -107,10 +107,10 @@ namespace Ghost.Core.Testing.InMemory
                 // Add instrumentation layer
                 if (useInstrumentationLayer)
                 {
-                    data = new Data.Decorators.InstrumentedGhostData(
+                    data = new InstrumentedGhostData(
                         data,
                         sp.GetRequiredService<IMetricsCollector>(),
-                        sp.GetRequiredService<ILogger<Data.Decorators.InstrumentedGhostData>>());
+                        sp.GetRequiredService<ILogger<InstrumentedGhostData>>());
                 }
                 
                 return data;

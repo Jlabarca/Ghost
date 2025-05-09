@@ -9,12 +9,13 @@ public record MetricValue(string ProcessCpu, double TotalSeconds, Dictionary<str
   public Dictionary<string, string> Tags { get; init; }
   public DateTime Timestamp { get; init; }
 
-  public MetricValue(MetricValue processCpu)
+  public MetricValue() : this(
+      string.Empty,
+      0,
+      new Dictionary<string, string>(),
+      DateTime.UtcNow
+  )
   {
-    ProcessCpu = processCpu.ProcessCpu;
-    TotalSeconds = processCpu.TotalSeconds;
-    Dictionary = processCpu.Dictionary;
-    Timestamp = processCpu.Timestamp;
   }
 }
 

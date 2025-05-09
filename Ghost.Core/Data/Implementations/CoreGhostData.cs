@@ -12,7 +12,7 @@ namespace Ghost.Core.Data.Implementations
     {
         private readonly ConnectionPoolManager _connectionPool;
         private readonly IDatabaseClient _db;
-        private readonly ICacheProvider _cache;
+        private readonly ICache _cache;
         private readonly ISchemaManager _schema;
         private readonly ILogger<CoreGhostData> _logger;
         private readonly TimeSpan _defaultCacheExpiry = TimeSpan.FromMinutes(5);
@@ -30,7 +30,7 @@ namespace Ghost.Core.Data.Implementations
         public CoreGhostData(
             ConnectionPoolManager connectionPool,
             IDatabaseClient db, 
-            ICacheProvider cache,
+            ICache cache,
             ISchemaManager schema,
             ILogger<CoreGhostData> logger)
         {

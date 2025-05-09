@@ -2,6 +2,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Spectre.Console.Cli;
 using Ghost.Core.Storage;
 using Ghost.Core.Data;
+using Ghost.Core.Data.Implementations;
 using Ghost.Templates;
 using System.Reflection;
 
@@ -56,7 +57,7 @@ public class GhostFatherCLI : GhostApp
                 "cache");
 
         Directory.CreateDirectory(cachePath);
-        var cache = new LocalCache(cachePath);
+        var cache = new MemoryCache(G.GetLogger());
         Services.AddSingleton<ICache>(cache);
 
         // Configure bus

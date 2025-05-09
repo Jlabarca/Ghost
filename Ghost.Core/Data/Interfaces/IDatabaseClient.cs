@@ -1,4 +1,3 @@
-
 namespace Ghost.Core.Data;
 
 /// <summary>

@@ -20,9 +20,9 @@ public static class CommandRegistry
 
     private static void ValidateCommandImplementation(CommandDefinition command)
     {
-        L.LogDebug($"Validating command: {command.Name} ({command.CommandType.Name})");
-        L.LogDebug($"  Base type: {command.CommandType.BaseType?.Name ?? "none"}");
-        L.LogDebug($"  Implements ICommand: {typeof(ICommand).IsAssignableFrom(command.CommandType)}");
+        G.LogDebug($"Validating command: {command.Name} ({command.CommandType.Name})");
+        G.LogDebug($"  Base type: {command.CommandType.BaseType?.Name ?? "none"}");
+        G.LogDebug($"  Implements ICommand: {typeof(ICommand).IsAssignableFrom(command.CommandType)}");
 
         // Check inheritance
         if (!typeof(ICommand).IsAssignableFrom(command.CommandType) &&

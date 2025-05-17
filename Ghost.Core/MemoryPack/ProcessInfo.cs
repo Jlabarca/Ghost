@@ -90,7 +90,7 @@ public partial class ProcessInfo : IAsyncDisposable
     ConfigureStartInfo(environment);
 
     Status = ProcessStatus.Stopped; // Initial status
-    L.LogDebug("Created ProcessInfo: {0} ({1})", Id, metadata.Name);
+    G.LogDebug($"Created ProcessInfo: {Id} ({metadata.Name})");
   }
 
   private void ConfigureStartInfo(Dictionary<string, string>? environment = null)
@@ -152,7 +152,7 @@ public partial class ProcessInfo : IAsyncDisposable
       if (_isDisposed) throw new ObjectDisposedException(nameof(ProcessInfo));
       if (Status == ProcessStatus.Running)
       {
-        // L.LogWarn("Process already running: {0}", Id);
+        // G.LogWarn("Process already running: {0}", Id);
         return;
       }
 
@@ -180,13 +180,13 @@ public partial class ProcessInfo : IAsyncDisposable
         _process.BeginOutputReadLine();
         _process.BeginErrorReadLine();
 
-        // L.LogInfo("Started process: {0}", Id);
+        // G.LogInfo("Started process: {0}", Id);
       }
       catch (Exception ex)
       {
         SetLastError(ex); // Use helper
         await UpdateStatusAsync(ProcessStatus.Failed);
-        // L.LogError("Failed to start process: {0}", ex, Id);
+        // G.LogError("Failed to start process: {0}", ex, Id);
         throw; // Re-throw original exception
       }
     }
@@ -213,7 +213,7 @@ public partial class ProcessInfo : IAsyncDisposable
       {
         StopTime = DateTime.UtcNow;
         await UpdateStatusAsync(ProcessStatus.Stopped);
-        // L.LogInfo("Process already exited or not running: {0}", Id);
+        // G.LogInfo("Process already exited or not running: {0}", Id);
         return;
       }
 
@@ -228,7 +228,7 @@ public partial class ProcessInfo : IAsyncDisposable
           // Wait for exit or timeout
           if (!_process.WaitForExit((int)timeout.TotalMilliseconds))
           {
-            // L.LogWarn("Process {0} did not exit gracefully, killing.", Id);
+            // G.LogWarn("Process {0} did not exit gracefully, killing.", Id);
             try { _process.Kill(entireProcessTree: true); } catch { /* Ignore errors */ }
             // Need to wait a bit after kill, or call WaitForExit again briefly
             _process.WaitForExit(1000); // Wait briefly after kill
@@ -237,14 +237,14 @@ public partial class ProcessInfo : IAsyncDisposable
 
         StopTime = DateTime.UtcNow;
         await UpdateStatusAsync(ProcessStatus.Stopped);
-        // L.LogInfo("Stopped process: {0}", Id);
+        // G.LogInfo("Stopped process: {0}", Id);
       }
       catch (Exception ex)
       {
         SetLastError(ex); // Use helper
         // Consider setting status to Failed if stop fails unexpectedly
         await UpdateStatusAsync(ProcessStatus.Failed);
-        // L.LogError("Failed to stop process: {0}", ex, Id);
+        // G.LogError("Failed to stop process: {0}", ex, Id);
         // Avoid throwing here unless absolutely necessary, allow manager to decide
         // throw new GhostException($"Failed to stop process {Id}", ex, ErrorCode.ProcessError);
       }
@@ -269,7 +269,7 @@ public partial class ProcessInfo : IAsyncDisposable
     await Task.Delay(100);
     await StartAsync();
     RestartCount++;
-    // L.LogInfo("Restarted process: {0} (restart count: {1})", Id, RestartCount);
+    // G.LogInfo("Restarted process: {0} (restart count: {1})", Id, RestartCount);
   }
 
 
@@ -338,21 +338,21 @@ public partial class ProcessInfo : IAsyncDisposable
         if (_process != null) exitCode = _process.ExitCode;
       }
       catch (InvalidOperationException) { /* Process already gone */ }
-      catch (Exception ex) { /* L.LogError("Error getting exit code for {0}: {1}", Id, ex.Message); */ }
+      catch (Exception ex) { /* G.LogError("Error getting exit code for {0}: {1}", Id, ex.Message); */ }
 
 
       if (exitCode != 0)
       {
         SetLastError(new GhostException($"Process exited unexpectedly with code: {exitCode}", ErrorCode.ProcessError)); // Use helper
         await UpdateStatusAsync(ProcessStatus.Crashed);
-        // L.LogError("Process crashed: {0} (exit code: {1})", Id, exitCode);
+        // G.LogError("Process crashed: {0} (exit code: {1})", Id, exitCode);
       }
       else
       {
         // If it exited cleanly but wasn't explicitly stopped, record it.
         StopTime = DateTime.UtcNow; // Record exit time
         await UpdateStatusAsync(ProcessStatus.Stopped);
-        // L.LogInfo("Process exited normally (externally?): {0}", Id);
+        // G.LogInfo("Process exited normally (externally?): {0}", Id);
       }
 
       // Clean up the process object as it has exited
@@ -382,7 +382,7 @@ public partial class ProcessInfo : IAsyncDisposable
     }
     catch (Exception ex)
     {
-      // L.LogError("Error in status change handler for {0}: {1}", Id, ex.Message);
+      // G.LogError("Error in status change handler for {0}: {1}", Id, ex.Message);
     }
   }
 
@@ -394,7 +394,7 @@ public partial class ProcessInfo : IAsyncDisposable
     bool lockAcquired = await _lock.WaitAsync(TimeSpan.FromSeconds(5));
     if (!lockAcquired)
     {
-      // L.LogWarn("Timeout acquiring lock during disposal for process {0}. Forcing disposal.", Id);
+      // G.LogWarn("Timeout acquiring lock during disposal for process {0}. Forcing disposaG.", Id);
       // Proceed with disposal carefully without the lock, potential for race conditions
     }
 
@@ -420,7 +420,7 @@ public partial class ProcessInfo : IAsyncDisposable
             try { _process.Kill(entireProcessTree: true); } catch {/* Ignore */}
           }
         }
-        catch (Exception ex) { /* L.LogError("Error detaching events or killing process during disposal: {0}", ex, Id); */ }
+        catch (Exception ex) { /* G.LogError("Error detaching events or killing process during disposal: {0}", ex, Id); */ }
         finally
         {
           _process.Dispose(); // Dispose the Process object
@@ -433,7 +433,7 @@ public partial class ProcessInfo : IAsyncDisposable
 
       _outputBuffer.Clear();
       _errorBuffer.Clear();
-      // L.LogDebug("Disposed ProcessInfo: {0}", Id);
+      // G.LogDebug("Disposed ProcessInfo: {0}", Id);
     }
     finally
     {

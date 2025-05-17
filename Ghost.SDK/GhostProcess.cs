@@ -97,7 +97,7 @@ namespace Ghost
         SetupCoreServices();
 
         _isInitialized = true;
-        L.LogInfo("GhostProcess initialized successfully");
+        G.LogInfo("GhostProcess initialized successfully");
       }
       finally
       {
@@ -119,11 +119,6 @@ namespace Ghost
 
       _services.AddSingleton<IGhostBus>(sp => new GhostBus(sp.GetRequiredService<ICache>()));
 
-      // Register logging
-      _services.AddLogging(builder =>
-      {
-        builder.SetMinimumLevel(LogLevel.Debug);
-      });
 
       // Setup cache paths
       string dataPath = config.Core.DataPath ?? Path.Combine(
@@ -139,17 +134,24 @@ namespace Ghost
       {
           LogsPath = config.Core.LogsPath ?? "logs",
           OutputsPath = Path.Combine(config.Core.LogsPath ?? "logs", "outputs"),
-          LogLevel = LogLevel.Debug,
+          LogLevel = LogLevel.Trace, // again log level?
       };
 
-      _services.AddSingleton<IGhostLogger>(sp =>
+      DefaultGhostLogger _logger = new DefaultGhostLogger(loggerConfig);
+      var cache = new MemoryCache(_logger);
+      _logger.SetCache(cache);
+
+      G.Initialize(_logger);
+
+      _services.AddSingleton<IGhostLogger>(_logger);
+      _services.AddSingleton<ICache>(cache);
+
+      // Register logging
+      _services.AddLogging(builder =>
       {
-        var logger = new DefaultGhostLogger(loggerConfig);
-        L.Initialize(logger);
-        G.Initialize(logger);
-        return logger;
+        builder.AddProvider(new GhostLoggerProvider(loggerConfig, cache));
       });
-      _services.AddSingleton<ICache>(sp => new MemoryCache(sp.GetRequiredService<IGhostLogger>()));
+
       _services.AddSingleton<IGhostBus>(sp => new GhostBus(sp.GetRequiredService<ICache>()));
 
       // Register options
@@ -241,15 +243,10 @@ namespace Ghost
         _bus = _serviceProvider.GetRequiredService<IGhostBus>();
         _data = _serviceProvider.GetRequiredService<IGhostData>();
         _metricsCollector = _serviceProvider.GetRequiredService<IMetricsCollector>();
-
-        // Initialize logger for global access
-        var logger = _serviceProvider.GetRequiredService<IGhostLogger>();
-        L.Initialize(logger);
-        G.Initialize(logger);
       }
       catch (Exception e)
       {
-        L.LogError(e, "Failed to set up core services");
+        G.LogError(e, "Failed to set up core services");
         throw;
       }
 
@@ -381,8 +378,8 @@ namespace Ghost
     /// </summary>
     private void EnsureInitialized()
     {
-      if (!_isInitialized)
-        throw new InvalidOperationException("GhostProcess has not been initialized. Call Ghost.Init() first.");
+      // if (!_isInitialized)
+      //   throw new InvalidOperationException("GhostProcess has not been initialized. Call Ghost.Init() first.");
     }
 
     /// <summary>
@@ -406,7 +403,7 @@ namespace Ghost
         }
 
         _isInitialized = false;
-        L.LogInfo("GhostProcess shut down successfully");
+        G.LogInfo("GhostProcess shut down successfully");
       }
       finally
       {

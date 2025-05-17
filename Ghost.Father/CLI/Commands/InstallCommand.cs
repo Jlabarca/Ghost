@@ -432,7 +432,7 @@ public class InstallationService
                     }
                     else
                     {
-                        L.LogError($"Failed to copy file from {sourcePath} to {targetPath} after {maxRetries} attempts");
+                        G.LogError($"Failed to copy file from {sourcePath} to {targetPath} after {maxRetries} attempts");
                         throw;
                     }
                 }
@@ -440,12 +440,12 @@ public class InstallationService
                 {
                     // Wait before retry
                     await Task.Delay(1000 * retryCount);
-                    L.LogWarn($"Retrying file copy ({retryCount}/{maxRetries}): {Path.GetFileName(targetPath)}");
+                    G.LogWarn($"Retrying file copy ({retryCount}/{maxRetries}): {Path.GetFileName(targetPath)}");
                 }
             }
             catch (Exception ex)
             {
-                L.LogError(ex, $"Failed to copy file from {sourcePath} to {targetPath}");
+                G.LogError(ex, $"Failed to copy file from {sourcePath} to {targetPath}");
                 throw;
             }
         }
@@ -530,13 +530,13 @@ public class InstallationService
                 await process.WaitForExitAsync();
                 if (process.ExitCode != 0)
                 {
-                    L.LogWarn($"Failed to set executable permissions on {filePath}");
+                    G.LogWarn($"Failed to set executable permissions on {filePath}");
                 }
             }
         }
         catch (Exception ex)
         {
-            L.LogWarn($"Could not set executable permissions: {ex.Message}");
+            G.LogWarn($"Could not set executable permissions: {ex.Message}");
         }
     }
 }
@@ -623,7 +623,7 @@ public class EnvironmentSetup
         // If we can't determine the shell profile, just return
         if (profilePath == null || !File.Exists(profilePath))
         {
-            L.LogWarn($"Could not determine shell profile to update. Manual PATH update may be needed.");
+            G.LogWarn($"Could not determine shell profile to update. Manual PATH update may be needed.");
             return;
         }
 
@@ -637,12 +637,12 @@ public class EnvironmentSetup
             {
                 // Add to the profile file
                 await File.AppendAllTextAsync(profilePath, $"\n# Added by Ghost installer\n{exportLine}\n");
-                L.LogInfo($"Added Ghost bin directory to {profilePath}");
+                G.LogInfo($"Added Ghost bin directory to {profilePath}");
             }
         }
         catch (Exception ex)
         {
-            L.LogWarn($"Failed to update shell profile: {ex.Message}");
+            G.LogWarn($"Failed to update shell profile: {ex.Message}");
         }
 
         // Also create or update a script in the bin directory that can be sourced directly
@@ -663,7 +663,7 @@ public class EnvironmentSetup
         }
         catch (Exception ex)
         {
-            L.LogWarn($"Failed to create ghost-env.sh script: {ex.Message}");
+            G.LogWarn($"Failed to create ghost-env.sh script: {ex.Message}");
         }
     }
 
@@ -691,13 +691,13 @@ public class EnvironmentSetup
                 await process.WaitForExitAsync();
                 if (process.ExitCode != 0)
                 {
-                    L.LogWarn($"Failed to set executable permissions on {filePath}");
+                    G.LogWarn($"Failed to set executable permissions on {filePath}");
                 }
             }
         }
         catch (Exception ex)
         {
-            L.LogWarn($"Could not set executable permissions: {ex.Message}");
+            G.LogWarn($"Could not set executable permissions: {ex.Message}");
         }
     }
 }
@@ -718,7 +718,7 @@ public class SdkBuildService
             // First, check if dotnet is available
             if (!await IsDotnetAvailableAsync())
             {
-                L.LogWarn("The 'dotnet' command is not available. Will create minimal SDK implementations.");
+                G.LogWarn("The 'dotnet' command is not available. Will create minimal SDK implementations.");
                 await CreateMinimalSdkImplementationsAsync(libsDir, ctx);
                 return false;
             }
@@ -729,18 +729,18 @@ public class SdkBuildService
 
             if (coreProjPath == null || sdkProjPath == null)
             {
-                L.LogError("Could not find project files");
+                G.LogError("Could not find project files");
                 await CreateMinimalSdkImplementationsAsync(libsDir, ctx);
                 return false;
             }
 
-            L.LogInfo($"Found project files: {coreProjPath} and {sdkProjPath}");
+            G.LogInfo($"Found project files: {coreProjPath} and {sdkProjPath}");
 
             // Build Ghost.Core
             ctx.Status("Building Ghost.Core...");
             if (!await BuildProjectAsync(Path.GetDirectoryName(coreProjPath), "Ghost.Core.csproj"))
             {
-                L.LogError("Failed to build Ghost.Core");
+                G.LogError("Failed to build Ghost.Core");
                 await CreateMinimalSdkImplementationsAsync(libsDir, ctx);
                 return false;
             }
@@ -749,7 +749,7 @@ public class SdkBuildService
             ctx.Status("Building Ghost.SDK...");
             if (!await BuildProjectAsync(Path.GetDirectoryName(sdkProjPath), "Ghost.SDK.csproj"))
             {
-                L.LogError("Failed to build Ghost.SDK");
+                G.LogError("Failed to build Ghost.SDK");
                 await CreateMinimalSdkImplementationsAsync(libsDir, ctx);
                 return false;
             }
@@ -761,7 +761,7 @@ public class SdkBuildService
         }
         catch (Exception ex)
         {
-            L.LogError(ex, "Failed to build SDK libraries");
+            G.LogError(ex, "Failed to build SDK libraries");
             await CreateMinimalSdkImplementationsAsync(libsDir, ctx);
             return false;
         }
@@ -776,14 +776,14 @@ public class SdkBuildService
         var executablePath = Process.GetCurrentProcess().MainModule?.FileName;
         if (executablePath == null)
         {
-            L.LogError("Failed to determine executable path");
+            G.LogError("Failed to determine executable path");
             return (null, null);
         }
 
         var sourceDir = Path.GetDirectoryName(executablePath);
         if (sourceDir == null)
         {
-            L.LogError("Failed to determine source directory");
+            G.LogError("Failed to determine source directory");
             return (null, null);
         }
 
@@ -791,11 +791,11 @@ public class SdkBuildService
         var solutionDir = FindSolutionDirectory(sourceDir);
         if (solutionDir == null)
         {
-            L.LogError("Could not find solution directory");
+            G.LogError("Could not find solution directory");
             return (null, null);
         }
 
-        L.LogInfo($"Found solution directory: {solutionDir}");
+        G.LogInfo($"Found solution directory: {solutionDir}");
 
         // Find project paths
         var coreProjPath = Path.Combine(solutionDir, "Ghost.Core", "Ghost.Core.csproj");
@@ -803,13 +803,13 @@ public class SdkBuildService
 
         if (!File.Exists(coreProjPath))
         {
-            L.LogError($"Ghost.Core project not found at: {coreProjPath}");
+            G.LogError($"Ghost.Core project not found at: {coreProjPath}");
             return (null, null);
         }
 
         if (!File.Exists(sdkProjPath))
         {
-            L.LogError($"Ghost.SDK project not found at: {sdkProjPath}");
+            G.LogError($"Ghost.SDK project not found at: {sdkProjPath}");
             return (null, null);
         }
 
@@ -844,7 +844,7 @@ public class SdkBuildService
         }
 
         // If we can't find the solution directory, try standard paths
-        L.LogWarn("Solution directory not found via traversal. Checking standard paths...");
+        G.LogWarn("Solution directory not found via traversaG. Checking standard paths...");
 
         var baseDir = startDir;
 
@@ -955,12 +955,12 @@ public class SdkBuildService
                 psi.EnvironmentVariables["PATH"] = newPath;
             }
 
-            L.LogInfo($"Building project: dotnet {psi.Arguments} in {projectDir}");
+            G.LogInfo($"Building project: dotnet {psi.Arguments} in {projectDir}");
 
             var process = Process.Start(psi);
             if (process == null)
             {
-                L.LogError($"Failed to start dotnet build process for {projectDir}");
+                G.LogError($"Failed to start dotnet build process for {projectDir}");
                 return false;
             }
 
@@ -971,17 +971,17 @@ public class SdkBuildService
 
             if (process.ExitCode != 0)
             {
-                L.LogError($"Build failed for {projectDir}: {error}");
-                L.LogError($"Output: {output}");
+                G.LogError($"Build failed for {projectDir}: {error}");
+                G.LogError($"Output: {output}");
                 return false;
             }
 
-            L.LogInfo($"Successfully built {projectFile}");
+            G.LogInfo($"Successfully built {projectFile}");
             return true;
         }
         catch (Exception ex)
         {
-            L.LogError(ex, $"Error building project in {projectDir}");
+            G.LogError(ex, $"Error building project in {projectDir}");
             return false;
         }
     }
@@ -1031,11 +1031,11 @@ Common NuGet dependencies that will be required:
 - Microsoft.Extensions.Configuration.Json (9.0.0)
 ");
 
-            L.LogInfo("Created minimal SDK implementations in " + libsDir);
+            G.LogInfo("Created minimal SDK implementations in " + libsDir);
         }
         catch (Exception ex)
         {
-            L.LogError(ex, "Error creating minimal SDK implementations");
+            G.LogError(ex, "Error creating minimal SDK implementations");
         }
     }
 }

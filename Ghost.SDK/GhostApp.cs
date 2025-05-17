@@ -16,7 +16,7 @@ public enum GhostAppState
   Stopped,
   Failed
 }
-public class GhostApp : IAsyncDisposable
+public partial class GhostApp : IAsyncDisposable
 {
 
   internal protected ServiceCollection Services { get; } = new ServiceCollection();
@@ -83,17 +83,17 @@ public class GhostApp : IAsyncDisposable
   {
     if (State != GhostAppState.Created && State != GhostAppState.Stopped && State != GhostAppState.Failed)
     {
-      L.LogWarn($"Cannot start {GetType().Name} in state {State}");
+      G.LogWarn($"Cannot start {GetType().Name} in state {State}");
       return;
     }
 
     config ??= LoadConfigFromYaml();
     config ??= CreateDefaultConfig();
     _config = config;
-
     _lastArgs = args;
 
-    G.Init(this);
+    GhostProcess = new GhostProcess();
+    GhostProcess.Initialize(this);
 
     StartAsync(args).GetAwaiter().GetResult();
   }
@@ -176,7 +176,7 @@ public class GhostApp : IAsyncDisposable
     }
     catch (Exception ex)
     {
-      L.LogWarn($"Error applying app settings: {ex.Message}");
+      G.LogWarn($"Error applying app settings: {ex.Message}");
     }
   }
 
@@ -241,45 +241,6 @@ public class GhostApp : IAsyncDisposable
     };
   }
 
-  /// <summary>
-  /// Initializes the connection to GhostFather monitoring system
-  /// </summary>
-  private void InitializeGhostFatherConnection()
-  {
-    try
-    {
-      L.LogDebug("Initializing connection to GhostFather...");
-
-      // Create metadata for the process
-      var metadata = new ProcessMetadata(
-          Name: Config.App.Name ?? GetType().Name,
-          Type: IsService ? "service" : "app",
-          Version: Config.App.Version ?? "1.0.0",
-          Environment: new Dictionary<string, string>(),
-          Configuration: new Dictionary<string, string>
-          {
-              ["AppType"] = IsService ? "service" : "one-shot"
-          }
-      );
-
-      // Create connection
-      Connection = new GhostFatherConnection(metadata);
-
-      // Start reporting if auto-monitor is enabled
-      if (AutoMonitor)
-      {
-        Connection.StartReporting();
-      }
-
-      L.LogInfo($"Connected to GhostFather: {Config.App.Id}");
-    }
-    catch (Exception ex)
-    {
-      L.LogWarn($"Failed to connect to GhostFather: {ex.Message}");
-      // Create dummy connection that does nothing
-      Connection = null;
-    }
-  }
 
   /// <summary>
   /// Starts the application asynchronously
@@ -301,7 +262,7 @@ public class GhostApp : IAsyncDisposable
       _cts = new CancellationTokenSource();
 
       // Log start
-      L.LogInfo($"Starting {GetType().Name}...");
+      G.LogInfo($"Starting {GetType().Name}...");
 
       // Report running state
       await ReportHealthAsync("Starting", "Application is starting");
@@ -327,15 +288,15 @@ public class GhostApp : IAsyncDisposable
       // Call lifecycle hooks
       await OnAfterRunAsync();
 
-      // Update state if still running (might have been stopped during OnAfterRunAsync)
-      if (State == GhostAppState.Running)
-      {
-        UpdateState(GhostAppState.Stopped);
-      }
+      // // Update state if still running (might have been stopped during OnAfterRunAsync) TODO: why this? lets stop it elsewhere and only if we are not a service
+      // if (State == GhostAppState.Running)
+      // {
+      //   UpdateState(GhostAppState.Stopped);
+      // }
     }
     catch (Exception ex)
     {
-      L.LogError(ex, $"Error executing {GetType().Name}");
+      G.LogError(ex, $"Error executing {GetType().Name}");
 
       // Update state
       UpdateState(GhostAppState.Failed);
@@ -384,7 +345,7 @@ public class GhostApp : IAsyncDisposable
     var delayMs = (int)(backoffSeconds * 1000 * jitter);
 
     // Report restarting
-    L.LogInfo($"Application failed. Restarting in {delayMs / 1000.0:0.0}s ({_restartAttempts}/{MaxRestartAttempts})");
+    G.LogInfo($"Application failed. Restarting in {delayMs / 1000.0:0.0}s ({_restartAttempts}/{MaxRestartAttempts})");
     await ReportHealthAsync("Restarting", $"Restarting after error: {ex.Message}");
 
     // Wait before restart
@@ -404,7 +365,7 @@ public class GhostApp : IAsyncDisposable
     var oldState = State;
     State = newState;
 
-    L.LogDebug($"App state changed: {oldState} → {newState}");
+    G.LogDebug($"App state changed: {oldState} -> {newState}");
     StateChanged?.Invoke(this, newState);
   }
 
@@ -429,7 +390,7 @@ public class GhostApp : IAsyncDisposable
       }
       catch (Exception ex)
       {
-        L.LogWarn($"Failed to report health status: {ex.Message}");
+        G.LogWarn($"Failed to report health status: {ex.Message}");
       }
     }
   }
@@ -439,7 +400,7 @@ public class GhostApp : IAsyncDisposable
   /// </summary>
   public virtual Task RunAsync(IEnumerable<string> args)
   {
-    L.LogInfo($"Running Ghost application: {GetType().Name}");
+    G.LogInfo($"Running Ghost application: {GetType().Name}");
     return Task.CompletedTask;
   }
 
@@ -497,7 +458,7 @@ public class GhostApp : IAsyncDisposable
     }
     catch (Exception ex)
     {
-      L.LogError(ex, "Error in tick callback");
+      G.LogError(ex, "Error in tick callback");
 
       // Don't crash the app for tick errors, but notify
       OnErrorOccurred(ex);
@@ -518,7 +479,7 @@ public class GhostApp : IAsyncDisposable
       // Update state
       UpdateState(GhostAppState.Stopping);
 
-      L.LogInfo($"Stopping {GetType().Name}...");
+      G.LogInfo($"Stopping {GetType().Name}...");
 
       // Cancel any operations
       _cts.Cancel();
@@ -531,7 +492,7 @@ public class GhostApp : IAsyncDisposable
     }
     catch (Exception ex)
     {
-      L.LogError(ex, $"Error stopping {GetType().Name}");
+      G.LogError(ex, $"Error stopping {GetType().Name}");
 
       // Update state to failed
       UpdateState(GhostAppState.Failed);
@@ -544,12 +505,22 @@ public class GhostApp : IAsyncDisposable
     }
   }
 
-  /// <summary>
-  /// Cleanup resources
-  /// </summary>
+
   public async virtual ValueTask DisposeAsync()
   {
     // Stop the application if it's still running
+    foreach (var action in _disposalActions)
+    {
+      try
+      {
+        await action();
+      }
+      catch (Exception ex)
+      {
+        G.LogError(ex, "Error executing disposal action");
+      }
+    }
+
     try
     {
       if (State == GhostAppState.Running || State == GhostAppState.Starting)
@@ -559,7 +530,7 @@ public class GhostApp : IAsyncDisposable
     }
     catch (Exception ex)
     {
-      L.LogError(ex, "Error stopping application during dispose");
+      G.LogError(ex, "Error stopping application during dispose");
     }
 
     // Dispose connection
@@ -571,7 +542,7 @@ public class GhostApp : IAsyncDisposable
       }
       catch (Exception ex)
       {
-        L.LogError(ex, "Error disposing GhostFather connection");
+        G.LogError(ex, "Error disposing GhostFather connection");
       }
       finally
       {

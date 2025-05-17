@@ -131,7 +131,7 @@ public class TemplateManager
 
         if (maxIterations == 0)
         {
-            L.LogWarn($"Template processing reached max iterations for input: {input}");
+            G.LogWarn($"Template processing reached max iterations for input: {input}");
         }
 
         return result;
@@ -178,7 +178,7 @@ public class TemplateManager
 
         if (sourceTemplatesPath == null)
         {
-            L.LogWarn("Templates directory not found. Skipping template installation.");
+            G.LogWarn("Templates directory not found. Skipping template installation.");
             return;
         }
 
@@ -188,7 +188,7 @@ public class TemplateManager
 
         if (string.Equals(normalizedSource, normalizedTarget, StringComparison.OrdinalIgnoreCase))
         {
-            L.LogInfo("Template source and target are the same. Skipping template copying.");
+            G.LogInfo("Template source and target are the same. Skipping template copying.");
             return;
         }
 
@@ -207,14 +207,14 @@ public class TemplateManager
         var executablePath = Process.GetCurrentProcess().MainModule?.FileName;
         if (executablePath == null)
         {
-            L.LogError("Could not determine executable path");
+            G.LogError("Could not determine executable path");
             return null;
         }
 
         var sourceDir = Path.GetDirectoryName(executablePath);
         if (sourceDir == null)
         {
-            L.LogError("Could not determine source directory");
+            G.LogError("Could not determine source directory");
             return null;
         }
 
@@ -237,17 +237,17 @@ public class TemplateManager
             try
             {
                 var fullPath = Path.GetFullPath(path);
-                L.LogInfo($"Checking for templates directory: {fullPath}");
+                G.LogInfo($"Checking for templates directory: {fullPath}");
 
                 if (Directory.Exists(fullPath))
                 {
-                    L.LogInfo($"Found templates directory: {fullPath}");
+                    G.LogInfo($"Found templates directory: {fullPath}");
                     return fullPath;
                 }
             }
             catch (Exception ex)
             {
-                L.LogWarn($"Error checking template path {path}: {ex.Message}");
+                G.LogWarn($"Error checking template path {path}: {ex.Message}");
             }
         }
 
@@ -265,7 +265,7 @@ public class TemplateManager
         if (templateFolders.Length > 0)
         {
             // If there are subdirectories, assume each is a template
-            L.LogInfo($"Found {templateFolders.Length} templates to install");
+            G.LogInfo($"Found {templateFolders.Length} templates to install");
 
             // Copy each template folder
             foreach (var templateFolder in templateFolders)
@@ -299,31 +299,31 @@ public class TemplateManager
                         }
                         catch (Exception ex)
                         {
-                            L.LogWarn($"Failed to delete existing template: {ex.Message}");
+                            G.LogWarn($"Failed to delete existing template: {ex.Message}");
                         }
                     }
 
                     // Copy the template folder
                     await CopyDirectoryAsync(templateFolder, targetFolder);
-                    L.LogInfo($"Installed template: {templateName}");
+                    G.LogInfo($"Installed template: {templateName}");
                 }
             }
         }
         else
         {
             // If there are no subdirectories, copy the entire Template folder content
-            L.LogInfo("Copying entire Template directory content");
+            G.LogInfo("Copying entire Template directory content");
 
             var files = Directory.GetFiles(sourcePath, "*", SearchOption.AllDirectories);
             if (files.Length > 0)
             {
                 // Copy all files and directories
                 await CopyDirectoryAsync(sourcePath, targetPath);
-                L.LogInfo($"Installed templates from: {sourcePath}");
+                G.LogInfo($"Installed templates from: {sourcePath}");
             }
             else
             {
-                L.LogWarn($"Template directory {sourcePath} exists but is empty. Nothing to copy.");
+                G.LogWarn($"Template directory {sourcePath} exists but is empty. Nothing to copy.");
             }
         }
     }
@@ -376,7 +376,7 @@ public class TemplateManager
                 retryCount++;
                 if (retryCount >= maxRetries)
                 {
-                    L.LogWarn($"Failed to copy file: {sourcePath} to {targetPath} after {maxRetries} attempts");
+                    G.LogWarn($"Failed to copy file: {sourcePath} to {targetPath} after {maxRetries} attempts");
                     throw; // Rethrow the exception after all retries failed
                 }
 

@@ -1,5 +1,6 @@
 using Ghost.Core;
 using Ghost.Core.Exceptions;
+using Ghost.Core.Monitoring;
 using Microsoft.Extensions.DependencyInjection;
 using System.Text.Json;
 using MemoryPack;
@@ -20,7 +21,7 @@ public class GhostFatherDaemon : GhostApp
 
     public override async Task RunAsync(IEnumerable<string> args)
     {
-        L.LogInfo("GhostFather daemon starting...");
+        G.LogInfo("GhostFather daemon starting...");
         ConfigureServices();
 
         // Initialize all services first
@@ -48,7 +49,7 @@ public class GhostFatherDaemon : GhostApp
         _isRunning = true;
         _metricsReportingTimer = new Timer(ReportMetricsCallback, null, TimeSpan.Zero, TimeSpan.FromSeconds(5));
 
-        L.LogInfo("GhostFather daemon initialized and ready");
+        G.LogInfo("GhostFather daemon initialized and ready");
     }
 
     private async Task InitializeServicesAsync()
@@ -58,11 +59,11 @@ public class GhostFatherDaemon : GhostApp
             // Initialize base services without connecting to father
             await _stateManager.InitializeAsync();
 
-            L.LogInfo("Services initialized successfully");
+            G.LogInfo("Services initialized successfully");
         }
         catch (Exception ex)
         {
-            L.LogError(ex, "Failed to initialize services");
+            G.LogError(ex, "Failed to initialize services");
             throw;
         }
     }
@@ -74,7 +75,7 @@ public class GhostFatherDaemon : GhostApp
     {
         try
         {
-            L.LogInfo("Registering daemon process directly");
+            G.LogInfo("Registering daemon process directly");
 
             var process = Process.GetCurrentProcess();
 
@@ -123,11 +124,11 @@ public class GhostFatherDaemon : GhostApp
             // Add to the communication server's connections
             await _communicationServer.RegisterConnectionAsync(connectionInfo);
 
-            L.LogInfo($"Daemon registered with ID: {_daemonId}");
+            G.LogInfo($"Daemon registered with ID: {_daemonId}");
         }
         catch (Exception ex)
         {
-            L.LogError(ex, "Failed to register daemon process");
+            G.LogError(ex, "Failed to register daemon process");
             throw;
         }
     }
@@ -164,7 +165,7 @@ public class GhostFatherDaemon : GhostApp
         }
         catch (Exception ex)
         {
-            L.LogError("Error in GhostFather tick", ex);
+            G.LogError("Error in GhostFather tick", ex);
             // Let base class handle restart if needed
             throw;
         }
@@ -172,7 +173,7 @@ public class GhostFatherDaemon : GhostApp
 
     protected override async Task OnBeforeRunAsync()
     {
-        L.LogInfo("GhostFather preparing to start...");
+        G.LogInfo("GhostFather preparing to start...");
 
         // Ensure required directories exist
         Directory.CreateDirectory(Config.GetLogsPath());
@@ -187,7 +188,7 @@ public class GhostFatherDaemon : GhostApp
     {
         try
         {
-            L.LogInfo("GhostFather daemon shutting down gracefully...");
+            G.LogInfo("GhostFather daemon shutting down gracefully...");
             _isRunning = false;
 
             // Stop the metrics timer
@@ -211,7 +212,7 @@ public class GhostFatherDaemon : GhostApp
         }
         catch (Exception ex)
         {
-            L.LogError("Error during GhostFather shutdown", ex);
+            G.LogError("Error during GhostFather shutdown", ex);
         }
 
         base.DisposeAsync();
@@ -234,7 +235,7 @@ public class GhostFatherDaemon : GhostApp
     {
         try
         {
-            L.LogInfo("Getting connected ghost apps");
+            G.LogInfo("Getting connected ghost apps");
 
             var connections = _communicationServer.GetActiveConnections();
             var connectionInfo = connections.Select(c => new
@@ -255,7 +256,7 @@ public class GhostFatherDaemon : GhostApp
         }
         catch (Exception ex)
         {
-            L.LogError(ex, "Failed to get connection information");
+            G.LogError(ex, "Failed to get connection information");
             await SendCommandResponseAsync(cmd, false, error: ex.Message);
         }
     }
@@ -283,7 +284,7 @@ public class GhostFatherDaemon : GhostApp
                 }
                 catch (Exception ex)
                 {
-                    L.LogWarn($"Failed to deserialize MemoryPack registration data: {ex.Message}");
+                    G.LogWarn($"Failed to deserialize MemoryPack registration data: {ex.Message}");
                 }
             }
 
@@ -295,7 +296,7 @@ public class GhostFatherDaemon : GhostApp
             var force = cmd.Parameters.TryGetValue("force", out var forceStr) &&
                 bool.TryParse(forceStr, out var forceBool) && forceBool;
 
-            L.LogInfo($"Registering process: {registration.Name} ({registration.Id})");
+            G.LogInfo($"Registering process: {registration.Name} ({registration.Id})");
 
             // Check if process already exists
             try
@@ -330,7 +331,7 @@ public class GhostFatherDaemon : GhostApp
         }
         catch (Exception ex)
         {
-            L.LogError(ex, "Failed to register process");
+            G.LogError(ex, "Failed to register process");
             await SendCommandResponseAsync(cmd, false, error: ex.Message);
         }
     }
@@ -363,7 +364,7 @@ public class GhostFatherDaemon : GhostApp
         }
         catch (Exception ex)
         {
-            L.LogError(ex, "Failed to process ping command");
+            G.LogError(ex, "Failed to process ping command");
             await SendCommandResponseAsync(cmd, false, error: ex.Message);
         }
     }
@@ -377,7 +378,7 @@ public class GhostFatherDaemon : GhostApp
                 throw new ArgumentException("Process ID is required");
             }
 
-            L.LogInfo($"Starting process: {processId}");
+            G.LogInfo($"Starting process: {processId}");
 
             // Start the process
             await _processManager.StartProcessAsync(processId);
@@ -391,7 +392,7 @@ public class GhostFatherDaemon : GhostApp
         }
         catch (Exception ex)
         {
-            L.LogError(ex, "Failed to start process");
+            G.LogError(ex, "Failed to start process");
             await SendCommandResponseAsync(cmd, false, error: ex.Message);
         }
     }
@@ -405,7 +406,7 @@ public class GhostFatherDaemon : GhostApp
                 throw new ArgumentException("Process ID is required");
             }
 
-            L.LogInfo($"Stopping process: {processId}");
+            G.LogInfo($"Stopping process: {processId}");
 
             // Stop the process
             await _processManager.StopProcessAsync(processId);
@@ -419,7 +420,7 @@ public class GhostFatherDaemon : GhostApp
         }
         catch (Exception ex)
         {
-            L.LogError(ex, "Failed to stop process");
+            G.LogError(ex, "Failed to stop process");
             await SendCommandResponseAsync(cmd, false, error: ex.Message);
         }
     }
@@ -433,7 +434,7 @@ public class GhostFatherDaemon : GhostApp
                 throw new ArgumentException("Process ID is required");
             }
 
-            L.LogInfo($"Restarting process: {processId}");
+            G.LogInfo($"Restarting process: {processId}");
 
             // Restart the process (stop then start)
             await _processManager.RestartProcessAsync(processId);
@@ -447,7 +448,7 @@ public class GhostFatherDaemon : GhostApp
         }
         catch (Exception ex)
         {
-            L.LogError(ex, "Failed to restart process");
+            G.LogError(ex, "Failed to restart process");
             await SendCommandResponseAsync(cmd, false, error: ex.Message);
         }
     }
@@ -456,7 +457,7 @@ public class GhostFatherDaemon : GhostApp
     {
         try
         {
-            L.LogInfo("Getting processes status");
+            G.LogInfo("Getting processes status");
 
             // Check if a specific process ID was provided
             if (cmd.Parameters.TryGetValue("processId", out var processId))
@@ -485,7 +486,7 @@ public class GhostFatherDaemon : GhostApp
         }
         catch (Exception ex)
         {
-            L.LogError(ex, "Failed to get process status");
+            G.LogError(ex, "Failed to get process status");
             await SendCommandResponseAsync(cmd, false, error: ex.Message);
         }
     }
@@ -503,7 +504,7 @@ public class GhostFatherDaemon : GhostApp
             bool watch = cmd.Parameters.TryGetValue("watch", out var watchStr) &&
                 bool.TryParse(watchStr, out var watchBool) && watchBool;
 
-            L.LogInfo($"Running app: {appId} from {workingDirectory} (watch: {watch})");
+            G.LogInfo($"Running app: {appId} from {workingDirectory} (watch: {watch})");
 
             // Check if the app exists
             if (!Directory.Exists(workingDirectory))
@@ -574,7 +575,7 @@ public class GhostFatherDaemon : GhostApp
         }
         catch (Exception ex)
         {
-            L.LogError(ex, "Failed to run app");
+            G.LogError(ex, "Failed to run app");
             await SendCommandResponseAsync(cmd, false, error: ex.Message);
         }
     }
@@ -599,7 +600,7 @@ public class GhostFatherDaemon : GhostApp
         }
         catch (Exception ex)
         {
-            L.LogError("Failed to send command response", ex);
+            G.LogError("Failed to send command response", ex);
         }
     }
 
@@ -650,13 +651,13 @@ public class GhostFatherDaemon : GhostApp
                 }
                 catch (Exception ex)
                 {
-                    L.LogError(ex, $"Error reporting metrics for process {process.Id}");
+                    G.LogError(ex, $"Error reporting metrics for process {process.Id}");
                 }
             }
         }
         catch (Exception ex)
         {
-            L.LogError(ex, "Error in metrics reporting");
+            G.LogError(ex, "Error in metrics reporting");
         }
     }
 

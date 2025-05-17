@@ -1,3 +1,4 @@
+using Ghost.Core.Logging;
 using System;
 using System.Collections.Generic;
 using System.Text.Json;
@@ -15,7 +16,7 @@ namespace Ghost.Core.Data.Implementations
   {
     private readonly ConnectionMultiplexer _redis;
     private readonly IDatabase _db;
-    private readonly ILogger<RedisCache> _logger;
+    private readonly IGhostLogger _logger;
     private readonly TimeSpan _defaultExpiry = TimeSpan.FromHours(1);
     private readonly SemaphoreSlim _lock = new(1, 1);
     private bool _disposed;
@@ -35,7 +36,7 @@ namespace Ghost.Core.Data.Implementations
     /// </summary>
     /// <param name="connectionString">The Redis connection string.</param>
     /// <param name="logger">The logger.</param>
-    public RedisCache(string connectionString, ILogger<RedisCache> logger)
+    public RedisCache(string connectionString, IGhostLogger logger)
     {
       if (string.IsNullOrEmpty(connectionString))
         throw new ArgumentNullException(nameof(connectionString));

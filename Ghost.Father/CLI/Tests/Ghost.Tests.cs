@@ -203,7 +203,7 @@
 //             G.LogInfo(message);
 //
 //             // Assert
-//             _mockLogger.Verify(l => l.LogWithSource(
+//             _mockLogger.Verify(l => G.LogWithSource(
 //                 message,
 //                 Microsoft.Extensions.Logging.LogLevel.Information,
 //                 null,
@@ -222,7 +222,7 @@
 //             G.LogDebug(message);
 //
 //             // Assert
-//             _mockLogger.Verify(l => l.LogWithSource(
+//             _mockLogger.Verify(l => G.LogWithSource(
 //                 message,
 //                 Microsoft.Extensions.Logging.LogLevel.Debug,
 //                 null,
@@ -241,7 +241,7 @@
 //             G.LogWarn(message);
 //
 //             // Assert
-//             _mockLogger.Verify(l => l.LogWithSource(
+//             _mockLogger.Verify(l => G.LogWithSource(
 //                 message,
 //                 Microsoft.Extensions.Logging.LogLevel.Warning,
 //                 null,
@@ -260,7 +260,7 @@
 //             G.LogError(message);
 //
 //             // Assert
-//             _mockLogger.Verify(l => l.LogWithSource(
+//             _mockLogger.Verify(l => G.LogWithSource(
 //                 message,
 //                 Microsoft.Extensions.Logging.LogLevel.Error,
 //                 null,
@@ -280,7 +280,7 @@
 //             G.LogError(message, exception);
 //
 //             // Assert
-//             _mockLogger.Verify(l => l.LogWithSource(
+//             _mockLogger.Verify(l => G.LogWithSource(
 //                 message,
 //                 Microsoft.Extensions.Logging.LogLevel.Error,
 //                 exception,
@@ -302,7 +302,7 @@
 //             G.LogInfo(format, arg1, arg2);
 //
 //             // Assert
-//             _mockLogger.Verify(l => l.LogWithSource(
+//             _mockLogger.Verify(l => G.LogWithSource(
 //                 expectedMessage,
 //                 Microsoft.Extensions.Logging.LogLevel.Information,
 //                 null,

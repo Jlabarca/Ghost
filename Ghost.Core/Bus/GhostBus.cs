@@ -120,9 +120,9 @@ namespace Ghost.Core.Storage
 
                             // Get the message from cache
                             string key = $"message:{topic}:{messageId}";
-                            byte[] data = await _cache.GetAsync<byte[]>(key);
+                            byte[]? data = await _cache.GetAsync<byte[]>(key, cancellationToken);
 
-                            if (data != null && data.Length > 0)
+                            if (data is { Length: > 0 })
                             {
                                 // Deserialize and yield the message using MessagePack
                                 T message = MemoryPackSerializer.Deserialize<T>(data);
@@ -176,7 +176,7 @@ namespace Ghost.Core.Storage
             }
             catch (Exception ex)
             {
-                L.LogWarn($"Error processing existing messages for pattern {channelPattern}: {ex.Message}");
+                G.LogWarn($"Error processing existing messages for pattern {channelPattern}: {ex.Message}");
             }
         }
 
@@ -233,7 +233,7 @@ namespace Ghost.Core.Storage
             }
             catch (Exception ex)
             {
-                L.LogWarn($"Message bus unavailable: {ex.Message}");
+                G.LogWarn($"Message bus unavailable: {ex.Message}");
                 return false;
             }
         }
@@ -290,7 +290,7 @@ namespace Ghost.Core.Storage
                         }
                         catch (Exception ex)
                         {
-                            L.LogWarn($"Error in subscription callback for {pattern}: {ex.Message}");
+                            G.LogWarn($"Error in subscription callback for {pattern}: {ex.Message}");
                         }
                     }
                 }
@@ -348,7 +348,7 @@ namespace Ghost.Core.Storage
             }
             catch (Exception ex)
             {
-                L.LogWarn($"Error in cleanup task: {ex.Message}");
+                G.LogWarn($"Error in cleanup task: {ex.Message}");
             }
         }
 

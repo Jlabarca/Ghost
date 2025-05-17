@@ -164,7 +164,7 @@ public class Service6Service : GhostServiceApp
     protected override async Task ServiceTickAsync()
     {
         // Increment uptime counter
-        _uptimeSeconds += (int)TickInterval.TotalSeconds;
+        _uptimeSeconds += (int)TickIntervaG.TotalSeconds;
 
         // Report basic metrics
         var process = Process.GetCurrentProcess();

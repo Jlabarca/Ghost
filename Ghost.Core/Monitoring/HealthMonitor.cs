@@ -66,7 +66,7 @@ public class HealthMonitor : IHealthMonitor
         }
         catch (Exception ex)
         {
-            L.LogError("Health check failed", ex);
+            G.LogError("Health check failed", ex);
         }
     }
 
@@ -78,7 +78,7 @@ public class HealthMonitor : IHealthMonitor
         }
         catch (Exception ex)
         {
-            L.LogError("Error in health change handler", ex);
+            G.LogError("Error in health change handler", ex);
         }
     }
 }

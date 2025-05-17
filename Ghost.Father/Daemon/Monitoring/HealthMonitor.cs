@@ -84,7 +84,7 @@ public class HealthMonitor : IAsyncDisposable
             process.OutputReceived += OnProcessOutputReceived;
             process.ErrorReceived += OnProcessErrorReceived;
 
-            L.LogInfo($"Started monitoring process: {process.Id} ({process.Metadata.Name})");
+            G.LogInfo($"Started monitoring process: {process.Id} ({process.Metadata.Name})");
         }
         finally
         {
@@ -120,7 +120,7 @@ public class HealthMonitor : IAsyncDisposable
         }
         catch (Exception ex)
         {
-            L.LogError(ex, "Failed to collect metrics for process: {Id}", process.Id);
+            G.LogError(ex, "Failed to collect metrics for process: {Id}", process.Id);
             return ProcessMetrics.CreateSnapshot(process.Id);
         }
     }
@@ -140,7 +140,7 @@ public class HealthMonitor : IAsyncDisposable
                 }
                 catch (Exception ex)
                 {
-                    L.LogError(ex, "Error checking health for process: {Id}",
+                    G.LogError(ex, "Error checking health for process: {Id}",
                         healthState.ProcessInfo.Id);
                 }
             }
@@ -184,8 +184,7 @@ public class HealthMonitor : IAsyncDisposable
         // Handle warnings
         if (warnings.Any())
         {
-            L.LogWarn("Process {Id} health warnings: {Warnings}",
-                process.Id, string.Join("; ", warnings));
+            G.LogWarn($"Process {process.Id} health warnings: {string.Join("; ", warnings)}");
 
             // Consider restarting if resource usage is extreme
             if (metrics.CpuPercentage > _cpuWarningThreshold * 1.5 ||
@@ -220,12 +219,12 @@ public class HealthMonitor : IAsyncDisposable
             state.LastRestart = DateTime.UtcNow;
             state.RestartAttempts++;
 
-            L.LogWarn("Restarted process {Id} due to resource usage (attempt {Attempt}/{Max})",
+            G.LogWarn("Restarted process {Id} due to resource usage (attempt {Attempt}/{Max})",
                 state.ProcessInfo.Id, state.RestartAttempts, _maxRestartAttempts);
         }
         catch (Exception ex)
         {
-            L.LogError(ex, "Failed to restart process: {Id}", state.ProcessInfo.Id);
+            G.LogError(ex, "Failed to restart process: {Id}", state.ProcessInfo.Id);
         }
     }
 
@@ -268,7 +267,7 @@ public class HealthMonitor : IAsyncDisposable
         }
         catch (Exception ex)
         {
-            L.LogError(ex, "Failed to publish health update for process: {Id}",
+            G.LogError(ex, "Failed to publish health update for process: {Id}",
                 state.ProcessInfo.Id);
         }
     }
@@ -315,7 +314,7 @@ public class HealthMonitor : IAsyncDisposable
                 }
                 catch (Exception ex)
                 {
-                    L.LogError(ex, "Error checking health for process: {Id}",
+                    G.LogError(ex, "Error checking health for process: {Id}",
                         healthState.ProcessInfo.Id);
                 }
             }

@@ -62,7 +62,7 @@ public class ProcessManager : IAsyncDisposable
             {
                 _processes[state.Id] = state;
                 await _healthMonitor.RegisterProcessAsync(state);
-                L.LogInfo("Loaded process state: {0} ({1})", state.Id, state.Status);
+                G.LogInfo($"Loaded process state: {state.Id} ({state.Status})");
             }
 
             // Start health monitoring
@@ -71,11 +71,11 @@ public class ProcessManager : IAsyncDisposable
             // Subscribe to system events
             _ = SubscribeToSystemEventsAsync();
 
-            L.LogInfo("Process manager initialized with {0} processes", _processes.Count);
+            G.LogInfo($"Process manager initialized with {_processes.Count} processes");
         }
         catch (Exception ex)
         {
-            L.LogError(ex, "Failed to initialize process manager");
+            G.LogError(ex, "Failed to initialize process manager");
             throw;
         }
         finally
@@ -112,11 +112,11 @@ public class ProcessManager : IAsyncDisposable
             await MigrateToVersion3Async();
         }
 
-        L.LogInfo($"PostgreSQL schema is up to date (version {Math.Max(currentVersion, 3)})");
+        G.LogInfo($"PostgreSQL schema is up to date (version {Math.Max(currentVersion, 3)})");
     }
     catch (Exception ex)
     {
-        L.LogError(ex, "Failed to initialize PostgreSQL schema");
+        G.LogError(ex, "Failed to initialize PostgreSQL schema");
         throw new GhostException("Failed to initialize database schema", ex, ErrorCode.StorageConfigurationFailed);
     }
 }
@@ -202,7 +202,7 @@ private async Task CreateInitialSchemaAsync()
             VALUES (1, 'Initial schema creation')");
 
         await transaction.CommitAsync();
-        L.LogInfo("PostgreSQL schema created (version 1)");
+        G.LogInfo("PostgreSQL schema created (version 1)");
     }
     catch
     {
@@ -236,7 +236,7 @@ private async Task MigrateToVersion2Async()
             VALUES (2, 'Added process_health table')");
 
         await transaction.CommitAsync();
-        L.LogInfo("Schema migrated to version 2");
+        G.LogInfo("Schema migrated to version 2");
     }
     catch
     {
@@ -280,7 +280,7 @@ private async Task MigrateToVersion3Async()
             VALUES (3, 'Added process_state_log table and metrics retention')");
 
         await transaction.CommitAsync();
-        L.LogInfo("Schema migrated to version 3");
+        G.LogInfo("Schema migrated to version 3");
     }
     catch
     {
@@ -301,13 +301,13 @@ private async Task MigrateToVersion3Async()
                 }
                 catch (Exception ex)
                 {
-                    L.LogError(ex, "Error handling system event: {Type}", evt.Type);
+                    G.LogError(ex, "Error handling system event: {Type}", evt.Type);
                 }
             }
         }
         catch (Exception ex)
         {
-            L.LogError(ex, "Fatal error in system event subscription");
+            G.LogError(ex, "Fatal error in system event subscription");
             throw;
         }
     }
@@ -326,7 +326,7 @@ private async Task MigrateToVersion3Async()
                 await HandleProcessCrashAsync(evt.ProcessId);
                 break;
             default:
-                L.LogWarn("Unknown system event type: {Type}", evt.Type);
+                G.LogWarn("Unknown system event type: {Type}", evt.Type);
                 break;
         }
     }
@@ -374,7 +374,7 @@ private async Task MigrateToVersion3Async()
             // Save state and register for monitoring
             await _stateManager.SaveProcessAsync(process);
             await _healthMonitor.RegisterProcessAsync(process);
-            L.LogInfo("Registered new process: {0} ({1})", process.Id, process.Metadata.Name);
+            G.LogInfo($"Registered new process: {process.Id} ({process.Metadata.Name})");
 
             return process;
         }
@@ -399,7 +399,7 @@ private async Task MigrateToVersion3Async()
 
             if (process.Status == ProcessStatus.Running)
             {
-                L.LogWarn("Process already running: {Id}", id);
+                G.LogWarn("Process already running: {Id}", id);
                 return;
             }
 
@@ -424,13 +424,13 @@ private async Task MigrateToVersion3Async()
                 {
                     await process.StartAsync();
                     await _stateManager.SaveProcessAsync(process);
-                    L.LogInfo("Started process: {Id} (attempt {Attempt}/{Max})", id, attempts, _maxStartAttempts);
+                    G.LogInfo("Started process: {Id} (attempt {Attempt}/{Max})", id, attempts, _maxStartAttempts);
                     return;
                 }
                 catch (Exception ex)
                 {
                     lastError = ex;
-                    L.LogWarn("Failed to start process: {Id} (attempt {Attempt}/{Max})", id, attempts, _maxStartAttempts);
+                    G.LogWarn("Failed to start process: {Id} (attempt {Attempt}/{Max})", id, attempts, _maxStartAttempts);
                     if (attempts < _maxStartAttempts)
                     {
                         await Task.Delay(TimeSpan.FromSeconds(Math.Pow(2, attempts)));
@@ -464,7 +464,7 @@ private async Task MigrateToVersion3Async()
 
             if (process.Status == ProcessStatus.Stopped)
             {
-                L.LogWarn("Process already stopped: {Id}", id);
+                G.LogWarn("Process already stopped: {Id}", id);
                 return;
             }
 
@@ -473,11 +473,11 @@ private async Task MigrateToVersion3Async()
             {
                 await process.StopAsync(_shutdownTimeout);
                 await _stateManager.SaveProcessAsync(process);
-                L.LogInfo("Stopped process: {Id}", id);
+                G.LogInfo("Stopped process: {Id}", id);
             }
             catch (Exception ex)
             {
-                L.LogError(ex, "Error stopping process: {Id}", id);
+                G.LogError(ex, "Error stopping process: {Id}", id);
                 throw new GhostException(
                     $"Failed to stop process: {id}", ex, ErrorCode.ProcessError);
             }
@@ -503,7 +503,7 @@ private async Task MigrateToVersion3Async()
 
             await process.RestartAsync(_shutdownTimeout);
             await _stateManager.SaveProcessAsync(process);
-            L.LogInfo("Restarted process: {Id} (restart count: {Count})", id, process.RestartCount);
+            G.LogInfo("Restarted process: {Id} (restart count: {Count})", id, process.RestartCount);
         }
         finally
         {
@@ -538,7 +538,7 @@ private async Task MigrateToVersion3Async()
             var registration = MemoryPackSerializer.Deserialize<ProcessRegistration>(evt.Data);
             if (registration == null)
             {
-                L.LogError("Invalid process registration data");
+                G.LogError("Invalid process registration data");
                 return;
             }
 
@@ -546,7 +546,7 @@ private async Task MigrateToVersion3Async()
         }
         catch (Exception ex)
         {
-            L.LogError(ex, "Failed to handle process registration");
+            G.LogError(ex, "Failed to handle process registration");
         }
     }
 
@@ -556,7 +556,7 @@ private async Task MigrateToVersion3Async()
         {
             await process.StopAsync(TimeSpan.FromSeconds(5));
             await _stateManager.SaveProcessAsync(process);
-            L.LogInfo("Process stopped: {Id}", processId);
+            G.LogInfo("Process stopped: {Id}", processId);
         }
     }
 
@@ -571,13 +571,13 @@ private async Task MigrateToVersion3Async()
             var config = _config.GetModuleConfig<ProcessConfig>($"processes:{processId}");
             if (config?.AutoRestart == true)
             {
-                L.LogInfo("Auto-restarting crashed process: {Id}", processId);
+                G.LogInfo("Auto-restarting crashed process: {Id}", processId);
                 await Task.Delay(config.RestartDelayMs);
                 await RestartProcessAsync(processId);
             }
             else
             {
-                L.LogError("Process crashed: {Id}", processId);
+                G.LogError("Process crashed: {Id}", processId);
             }
         }
     }
@@ -601,13 +601,13 @@ private async Task MigrateToVersion3Async()
             }
             catch (Exception ex)
             {
-                L.LogError(ex, "Errors occurred while stopping processes during shutdown");
+                G.LogError(ex, "Errors occurred while stopping processes during shutdown");
             }
 
             _processes.Clear();
             _lock.Dispose();
             _disposed = true;
-            L.LogInfo("Process manager disposed");
+            G.LogInfo("Process manager disposed");
         }
         finally
         {
@@ -656,7 +656,7 @@ private async Task MigrateToVersion3Async()
                         continue;
                     case ProcessStatus.Stopping:
                     case ProcessStatus.Stopped:
-                        L.LogDebug("Process is healthy: {Id} ({Name})", process.Id, process.Metadata.Name);
+                        G.LogDebug($"Process is healthy: {process.Id} ({process.Metadata.Name})");
                         continue;
                     case ProcessStatus.Failed:
                     case ProcessStatus.Crashed:
@@ -666,7 +666,7 @@ private async Task MigrateToVersion3Async()
                         throw new ArgumentOutOfRangeException();
                 }
 
-                L.LogWarn("Process is unhealthy: {Id} ({Name})", process.Id, process.Metadata.Name);
+                G.LogWarn(string.Format("Process is unhealthy: {Id} ({Name})", process.Id, process.Metadata.Name));
                 // Attempt to restart process
                 await process.RestartAsync(_shutdownTimeout);
                 await _stateManager.SaveProcessAsync(process);
@@ -674,7 +674,7 @@ private async Task MigrateToVersion3Async()
         }
         catch (Exception ex)
         {
-            L.LogError(ex, "Error during maintenance tick");
+            G.LogError(ex, "Error during maintenance tick");
         }
         finally
         {
@@ -758,7 +758,7 @@ private async Task MigrateToVersion3Async()
                 if (remainingProcesses.Count > 0 && force)
                 {
                     AnsiConsole.MarkupLine(
-                        "[yellow]Warning:[/] Some Ghost processes could not be terminated. Installation may fail.");
+                        "[yellow]Warning:[/] Some Ghost processes could not be terminated. Installation may faiG.");
                 }
                 else if (remainingProcesses.Count > 0)
                 {

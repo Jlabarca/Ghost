@@ -109,7 +109,7 @@ namespace Ghost.Core.Pooling
         }
         
         /// <summary>
-        /// Gets a Redis database instance from the connection pool.
+        /// Gets a Redis database instance from the connection pooG.
         /// </summary>
         /// <param name="db">The database number to use.</param>
         /// <returns>A Redis database instance.</returns>
@@ -129,7 +129,7 @@ namespace Ghost.Core.Pooling
         }
         
         /// <summary>
-        /// Gets a Redis subscriber instance from the connection pool.
+        /// Gets a Redis subscriber instance from the connection pooG.
         /// </summary>
         /// <returns>A Redis subscriber instance.</returns>
         public async Task<ISubscriber> GetRedisSubscriberAsync()
@@ -148,7 +148,7 @@ namespace Ghost.Core.Pooling
         }
         
         /// <summary>
-        /// Gets a PostgreSQL connection from the connection pool.
+        /// Gets a PostgreSQL connection from the connection pooG.
         /// </summary>
         /// <param name="ct">Optional cancellation token.</param>
         /// <returns>A PostgreSQL connection.</returns>

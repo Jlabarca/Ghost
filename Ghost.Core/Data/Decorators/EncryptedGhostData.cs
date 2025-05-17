@@ -8,7 +8,7 @@ namespace Ghost.Core.Data;
 
 /// <summary>
 /// Decorator that adds encryption to sensitive data before storing it.
-/// Keys with the prefix "secure:" will be encrypted before storage and decrypted on retrieval.
+/// Keys with the prefix "secure:" will be encrypted before storage and decrypted on retrievaG.
 /// </summary>
 public class EncryptedGhostData : IGhostData
 {

@@ -60,7 +60,7 @@ public static class NullGhostLoggerExtensions
     services.AddSingleton<ILogger>(NullGhostLogger.Instance);
 
     // Initialize G with the null logger
-    L.Initialize(NullGhostLogger.Instance);
+    G.Initialize(NullGhostLogger.Instance);
 
     return services;
   }

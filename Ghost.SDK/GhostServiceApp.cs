@@ -51,7 +51,7 @@
 //             }
 //             catch (Exception ex)
 //             {
-//                 L.LogError(ex, "Failed to initialize service components");
+//                 G.LogError(ex, "Failed to initialize service components");
 //             }
 //
 //             // Register state change handler
@@ -207,7 +207,7 @@
 //             }
 //             catch (Exception ex)
 //             {
-//                 L.LogError(ex, "Failed to configure monitoring services");
+//                 G.LogError(ex, "Failed to configure monitoring services");
 //             }
 //         }
 //
@@ -223,7 +223,7 @@
 //             HealthMonitor = serviceProvider.GetService<HealthMonitor>();
 //             Metrics = serviceProvider.GetService<MetricsCollector>();
 //
-//             L.LogDebug("Service components initialized");
+//             G.LogDebug("Service components initialized");
 //         }
 //
 //         /// <summary>
@@ -235,7 +235,7 @@
 //             await _serviceLock.WaitAsync();
 //             try
 //             {
-//                 L.LogInfo($"Starting service: {Config.App.Name}");
+//                 G.LogInfo($"Starting service: {Config.App.Name}");
 //
 //                 // Start health monitor if available
 //                 if (HealthMonitor != null)
@@ -259,7 +259,7 @@
 //                 }
 //                 catch (Exception ex)
 //                 {
-//                     L.LogError(ex, "Error in service main loop");
+//                     G.LogError(ex, "Error in service main loop");
 //                     throw;
 //                 }
 //             }
@@ -349,7 +349,7 @@
 //             }
 //             catch (Exception ex)
 //             {
-//                 L.LogError(ex, "Error disposing service");
+//                 G.LogError(ex, "Error disposing service");
 //             }
 //         }
 //     }

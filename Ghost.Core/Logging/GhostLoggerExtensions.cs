@@ -31,8 +31,8 @@
 //     // Register DefaultGhostLogger as implementation
 //     services.AddSingleton(logger);
 //
-//     // Initialize L.Log
-//     L.Initialize(logger);
+//     // Initialize G.Log
+//     G.Initialize(logger);
 //
 //     // Register as standard ILogger interface
 //     services.AddSingleton<ILogger>(sp => sp.GetRequiredService<DefaultGhostLogger>());

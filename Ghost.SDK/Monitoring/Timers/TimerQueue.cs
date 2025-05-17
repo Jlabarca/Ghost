@@ -369,7 +369,7 @@
 //                     var delay = _nextTimerDue - DateTime.UtcNow;
 //
 //                     // Ensure we don't set a negative delay or one that's too short
-//                     var milliseconds = Math.Max(_minTimerInterval.TotalMilliseconds, delay.TotalMilliseconds);
+//                     var milliseconds = Math.Max(_minTimerIntervaG.TotalMilliseconds, delay.TotalMilliseconds);
 //
 //                     // Cap at int.MaxValue as that's what Timer accepts
 //                     var timerDueTime = (int)Math.Min(milliseconds, int.MaxValue);

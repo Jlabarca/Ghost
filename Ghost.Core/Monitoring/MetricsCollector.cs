@@ -93,7 +93,7 @@ public class MetricsCollector : IMetricsCollector
         }
         catch (Exception ex)
         {
-            L.LogError("Metrics collection failed", ex);
+            G.LogError("Metrics collection failed", ex);
         }
     }
 }

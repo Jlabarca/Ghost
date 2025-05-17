@@ -36,7 +36,7 @@ public class CommandProcessor
                 }
                 catch (Exception ex)
                 {
-                    L.LogError(ex, "Error processing command");
+                    G.LogError(ex, "Error processing command");
                 }
             }
         }
@@ -46,7 +46,7 @@ public class CommandProcessor
         }
         catch (Exception ex)
         {
-            L.LogError(ex, "Fatal error in command processor");
+            G.LogError(ex, "Fatal error in command processor");
             throw;
         }
     }
@@ -71,9 +71,7 @@ public class CommandProcessor
             }
 
             // Execute handler
-            L.LogDebug(
-                "Processing command {Type} for {Target}",
-                command.CommandType, command.TargetProcessId);
+            G.LogDebug($"Processing command {command.CommandType} for {command.TargetProcessId}");
 
             await handler(command);
 
@@ -82,9 +80,7 @@ public class CommandProcessor
         }
         catch (Exception ex)
         {
-            L.LogError(
-                ex, "Failed to process command {Type} for {Target}",
-                command.CommandType, command.TargetProcessId);
+            G.LogError(ex, $"Failed to process command {command.CommandType} for {command.TargetProcessId}");
 
             // Send error response
             await SendResponseAsync(command, false, ex.Message, null);
@@ -110,7 +106,7 @@ public class CommandProcessor
         }
         catch (Exception ex)
         {
-            L.LogError(ex, "Failed to send command response");
+            G.LogError(ex, "Failed to send command response");
         }
     }
 

@@ -12,90 +12,7 @@ public class GhostFatherCLI : GhostApp
 {
     private CommandApp _app;
     private TypeRegistrar _registrar;
-
-    /// <summary>
-    /// Configure the service collection with all required services
-    /// </summary>
-    private void ConfigureServices()
-    {
-        if (Config == null)
-        {
-            throw new ArgumentNullException(nameof(Config), "GhostFather CLI requires a valid GhostConfig");
-        }
-
-        Services.AddSingleton(Config);
-        Services.AddSingleton<IServiceCollection>(Services);
-
-        // Add core services
-        ConfigureCoreServices();
-
-        // Add template manager
-        var templatesPath = GetTemplatesPath();
-        Services.AddSingleton(_ => new TemplateManager(templatesPath));
-
-        // Register all commands from the registry
-        CommandRegistry.RegisterServices(Services);
-
-        // if (G.IsDebug)
-        // {
-        //     G.LogDebug("Registered services:");
-        //     foreach (var service in Services)
-        //     {
-        //         G.LogDebug($" {service.ServiceType.Name} -> {service.ImplementationType?.Name ?? "null"}");
-        //     }
-        // }
-    }
-
-    /// <summary>
-    /// Configure essential core services
-    /// </summary>
-    private void ConfigureCoreServices()
-    {
-        // Configure cache
-        var cachePath = Path.Combine(
-                Config.Core.DataPath ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Ghost"),
-                "cache");
-
-        Directory.CreateDirectory(cachePath);
-        var cache = new MemoryCache(G.GetLogger());
-        Services.AddSingleton<ICache>(cache);
-
-        // Configure bus
-        var bus = new GhostBus(cache);
-        Services.AddSingleton<IGhostBus>(bus);
-
-        // Configure database
-        // var dbPath = Path.Combine(
-        //     _config.Core.DataPath ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Ghost"),
-        //     "ghost.db");
-        // var database = new SQLiteDatabase(dbPath);
-
-        // Services.AddSingleton<IGhostData>(database);
-
-    }
-
-    /// <summary>
-    /// Configure all commands in the Spectre.Console CLI app
-    /// </summary>
-    private void ConfigureCommands(CommandApp app)
-    {
-        app.Configure(config =>
-        {
-            // Set metadata
-            var assemblyVersion = Assembly.GetExecutingAssembly().GetName().Version;
-            config.SetApplicationName("ghost");
-            config.SetApplicationVersion($"{assemblyVersion.Major}.{assemblyVersion.Minor}.{assemblyVersion.Build}");
-
-            // Register all commands from registry
-            CommandRegistry.ConfigureCommands(config);
-
-            // Enable exception propagation for better error handling
-            config.PropagateExceptions();
-
-            // Set custom style for console output
-            //config.UseAnsi();
-        });
-    }
+    private bool _servicesConfigured = false;
 
     /// <summary>
     /// Run the CLI with the provided arguments
@@ -118,8 +35,8 @@ public class GhostFatherCLI : GhostApp
 
         // Configure commands
         ConfigureCommands(_app);
-        L.LogDebug($"Running CLI with args: {string.Join(", ", args)}");
-        Execute(args);
+
+        G.LogDebug($"Running CLI with args: {string.Join(" ", args)}");
 
         try
         {
@@ -131,9 +48,64 @@ public class GhostFatherCLI : GhostApp
         }
         catch (Exception ex)
         {
-            L.LogError(ex, "Error executing command");
+            G.LogError(ex, "Error executing command");
             throw;
         }
+    }
+
+    private void ConfigureServices()
+    {
+        if (_servicesConfigured)
+            return;
+
+        if (Config == null)
+        {
+            throw new ArgumentNullException(nameof(Config), "GhostFather CLI requires a valid GhostConfig");
+        }
+
+        Services.AddSingleton(Config);
+        Services.AddSingleton<IServiceCollection>(Services);
+
+        var cachePath = Path.Combine(
+                Config.Core.DataPath ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Ghost"),
+                "cache");
+        Directory.CreateDirectory(cachePath);
+        var cache = new MemoryCache(G.GetLogger());
+        Services.AddSingleton<ICache>(cache);
+
+        // Configure bus
+        var bus = new GhostBus(cache);
+        Services.AddSingleton<IGhostBus>(bus);
+
+        // Add template manager
+        var templatesPath = GetTemplatesPath();
+        Services.AddSingleton(_ => new TemplateManager(templatesPath));
+
+        // Register all commands from the registry
+        CommandRegistry.RegisterServices(Services);
+
+        _servicesConfigured = true;
+    }
+
+
+    private void ConfigureCommands(CommandApp app)
+    {
+        app.Configure(config =>
+        {
+            // Set metadata
+            var assemblyVersion = Assembly.GetExecutingAssembly().GetName().Version;
+            config.SetApplicationName("ghost");
+            config.SetApplicationVersion($"{assemblyVersion.Major}.{assemblyVersion.Minor}.{assemblyVersion.Build}");
+
+            // Register all commands from registry
+            CommandRegistry.ConfigureCommands(config);
+
+            // Enable exception propagation for better error handling
+            config.PropagateExceptions();
+
+            // Set custom style for console output
+            //config.UseAnsi();
+        });
     }
 
     /// <summary>
@@ -174,7 +146,7 @@ public class GhostFatherCLI : GhostApp
         }
 
         // Fall back to default next to executable and create it
-        L.LogWarn($"Templates directory not found. Creating at: {templatePathNext}");
+        G.LogWarn($"Templates directory not found. Creating at: {templatePathNext}");
         Directory.CreateDirectory(templatePathNext);
 
         // Initialize templates
@@ -214,12 +186,21 @@ public class GhostFatherCLI : GhostApp
     {
         try
         {
-            await RunAsync(args);
+            // Don't call Execute() directly - it might already be initialized
+            if (State == GhostAppState.Created || State == GhostAppState.Stopped || State == GhostAppState.Failed)
+            {
+                Execute(args);
+            }
+            else
+            {
+                // Already initialized, just run the command
+                await RunAsync(args);
+            }
             return 0;
         }
         catch (Exception ex)
         {
-            L.LogError(ex, "Error executing CLI");
+            G.LogError(ex, "Error executing CLI");
             return 1;
         }
     }
@@ -227,28 +208,25 @@ public class GhostFatherCLI : GhostApp
     /// <summary>
     /// Clean up resources
     /// </summary>
-    public async ValueTask DisposeAsync()
+    public override async ValueTask DisposeAsync()
     {
         try
         {
-            L.LogDebug("Disposing GhostFatherCLI");
-
-            switch (Services)
+            G.LogDebug("Disposing GhostFatherCLI");
+            if (Services.BuildServiceProvider() is IAsyncDisposable disposable)
             {
-                // Dispose all services
-                case IDisposable d:
-                    d.Dispose();
-                    break;
-                case IAsyncDisposable sp:
-                    await sp.DisposeAsync();
-                    break;
+                await disposable.DisposeAsync();
+            }
+            else if (Services.BuildServiceProvider() is IDisposable d)
+            {
+                d.Dispose();
             }
 
             await base.DisposeAsync();
         }
         catch (Exception ex)
         {
-            L.LogError(ex, "Error disposing GhostFatherCLI");
+            G.LogError(ex, "Error disposing GhostFatherCLI");
         }
     }
 }

@@ -45,7 +45,7 @@ public static class GhostFather
             }
             catch (OperationCanceledException)
             {
-                L.LogInfo("GhostFatherDaemon shutting down...");
+                G.LogInfo("GhostFatherDaemon shutting down...");
             }
             finally
             {
@@ -54,7 +54,9 @@ public static class GhostFather
         }
         catch (Exception ex)
         {
-            L.LogCritical("Fatal error in GhostFatherDaemon", ex);
+            G.LogCritical("Fatal error in GhostFatherDaemon", ex);
+            G.LogError("Fatal error in GhostFatherDaemon: " + ex.Message);
+            G.LogError("Stack Trace: " + ex.StackTrace);
             Environment.Exit(1);
         }
     }

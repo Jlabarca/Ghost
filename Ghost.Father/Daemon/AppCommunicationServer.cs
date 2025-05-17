@@ -42,7 +42,7 @@ public class AppCommunicationServer
       _ = Task.Run(() => ListenForHealthUpdatesAsync(_cts.Token), _cts.Token);
       _ = Task.Run(() => ListenForSystemEventsAsync(_cts.Token), _cts.Token);
 
-      L.LogInfo("App communication server started");
+      G.LogInfo("App communication server started");
     }
     finally
     {
@@ -65,7 +65,7 @@ public class AppCommunicationServer
       _cts.Cancel();
       _connections.Clear();
 
-      L.LogInfo("App communication server stopped");
+      G.LogInfo("App communication server stopped");
     }
     finally
     {
@@ -98,7 +98,7 @@ public class AppCommunicationServer
       };
 
       _connections[registration.Id] = connectionInfo;
-      L.LogInfo($"Registered app connection: {registration.Name} ({registration.Id})");
+      G.LogInfo($"Registered app connection: {registration.Name} ({registration.Id})");
     }
     finally
     {
@@ -142,7 +142,7 @@ public class AppCommunicationServer
         if (now - connection.LastSeen > _connectionTimeout && connection.Status != "Disconnected")
         {
           connection.Status = "Disconnected";
-          L.LogInfo($"App disconnected due to timeout: {connection.Metadata.Name} ({connection.Id})");
+          G.LogInfo($"App disconnected due to timeout: {connection.Metadata.Name} ({connection.Id})");
 
           // Publish disconnection event
           await PublishConnectionStatusChangeAsync(connection, "Disconnected");
@@ -174,7 +174,7 @@ public class AppCommunicationServer
     }
     catch (Exception ex)
     {
-      L.LogError(ex, $"Error publishing connection status change for {connection.Id}");
+      G.LogError(ex, $"Error publishing connection status change for {connection.Id}");
     }
   }
 
@@ -213,7 +213,7 @@ public class AppCommunicationServer
             }
             catch
             {
-              L.LogWarn($"Could not deserialize heartbeat message for {appId}");
+              G.LogWarn($"Could not deserialize heartbeat message for {appId}");
             }
           }
 
@@ -224,7 +224,7 @@ public class AppCommunicationServer
         }
         catch (Exception ex)
         {
-          L.LogError(ex, "Error processing heartbeat message");
+          G.LogError(ex, "Error processing heartbeat message");
         }
       }
     }
@@ -234,7 +234,7 @@ public class AppCommunicationServer
     }
     catch (Exception ex)
     {
-      L.LogError(ex, "Fatal error in heartbeat listener");
+      G.LogError(ex, "Fatal error in heartbeat listener");
     }
   }
 
@@ -259,7 +259,7 @@ public class AppCommunicationServer
         // If reconnected, publish event
         if (wasDisconnected)
         {
-          L.LogInfo($"App reconnected: {connection.Metadata.Name} ({connection.Id})");
+          G.LogInfo($"App reconnected: {connection.Metadata.Name} ({connection.Id})");
           await PublishConnectionStatusChangeAsync(connection, "Connected");
         }
       }
@@ -284,7 +284,7 @@ public class AppCommunicationServer
         };
 
         _connections[heartbeat.Id] = newConnection;
-        L.LogInfo($"Auto-registered new app connection: {heartbeat.Id}");
+        G.LogInfo($"Auto-registered new app connection: {heartbeat.Id}");
       }
     }
     finally
@@ -331,7 +331,7 @@ public class AppCommunicationServer
             }
             catch
             {
-              L.LogWarn($"Could not deserialize metrics message for {appId}");
+              G.LogWarn($"Could not deserialize metrics message for {appId}");
             }
           }
 
@@ -342,7 +342,7 @@ public class AppCommunicationServer
         }
         catch (Exception ex)
         {
-          L.LogError(ex, "Error processing metrics message");
+          G.LogError(ex, "Error processing metrics message");
         }
       }
     }
@@ -352,7 +352,7 @@ public class AppCommunicationServer
     }
     catch (Exception ex)
     {
-      L.LogError(ex, "Fatal error in metrics listener");
+      G.LogError(ex, "Fatal error in metrics listener");
     }
   }
 
@@ -376,7 +376,7 @@ public class AppCommunicationServer
         // If reconnected, publish event
         if (wasDisconnected)
         {
-          L.LogInfo($"App reconnected via metrics: {connection.Metadata.Name} ({connection.Id})");
+          G.LogInfo($"App reconnected via metrics: {connection.Metadata.Name} ({connection.Id})");
           await PublishConnectionStatusChangeAsync(connection, "Connected");
         }
 
@@ -406,7 +406,7 @@ public class AppCommunicationServer
         };
 
         _connections[appId] = newConnection;
-        L.LogInfo($"Auto-registered new app connection from metrics: {appId}");
+        G.LogInfo($"Auto-registered new app connection from metrics: {appId}");
 
         // Save metrics to state manager
         await _stateManager.SaveProcessMetricsAsync(appId, metrics, "unknown");
@@ -464,7 +464,7 @@ public class AppCommunicationServer
         }
         catch (Exception ex)
         {
-          L.LogError(ex, "Error processing health status message");
+          G.LogError(ex, "Error processing health status message");
         }
       }
     }
@@ -474,7 +474,7 @@ public class AppCommunicationServer
     }
     catch (Exception ex)
     {
-      L.LogError(ex, "Fatal error in health status listener");
+      G.LogError(ex, "Fatal error in health status listener");
     }
   }
 
@@ -500,7 +500,7 @@ public class AppCommunicationServer
         // If reconnected, publish event
         if (wasDisconnected)
         {
-          L.LogInfo($"App reconnected via health status: {connection.Metadata.Name} ({connection.Id})");
+          G.LogInfo($"App reconnected via health status: {connection.Metadata.Name} ({connection.Id})");
           await PublishConnectionStatusChangeAsync(connection, "Connected");
         }
       }
@@ -526,7 +526,7 @@ public class AppCommunicationServer
         };
 
         _connections[healthStatus.Id] = newConnection;
-        L.LogInfo($"Auto-registered new app connection from health status: {healthStatus.Id}");
+        G.LogInfo($"Auto-registered new app connection from health status: {healthStatus.Id}");
       }
     }
     finally
@@ -563,7 +563,7 @@ public class AppCommunicationServer
         }
         catch (Exception ex)
         {
-          L.LogError(ex, "Error processing system event");
+          G.LogError(ex, "Error processing system event");
         }
       }
     }
@@ -573,7 +573,7 @@ public class AppCommunicationServer
     }
     catch (Exception ex)
     {
-      L.LogError(ex, "Fatal error in system event listener");
+      G.LogError(ex, "Fatal error in system event listener");
     }
   }
 
@@ -608,7 +608,7 @@ public class AppCommunicationServer
     }
     catch (Exception ex)
     {
-      L.LogError(ex, "Error handling process registration event");
+      G.LogError(ex, "Error handling process registration event");
     }
   }
 
@@ -625,7 +625,7 @@ public class AppCommunicationServer
       if (_connections.TryGetValue(systemEvent.ProcessId, out var connection))
       {
         connection.Status = "Stopped";
-        L.LogInfo($"App stopped: {connection.Metadata.Name} ({connection.Id})");
+        G.LogInfo($"App stopped: {connection.Metadata.Name} ({connection.Id})");
 
         // Publish stopped event
         await PublishConnectionStatusChangeAsync(connection, "Stopped");
@@ -650,7 +650,7 @@ public class AppCommunicationServer
       if (_connections.TryGetValue(systemEvent.ProcessId, out var connection))
       {
         connection.Status = "Crashed";
-        L.LogWarn($"App crashed: {connection.Metadata.Name} ({connection.Id})");
+        G.LogWarn($"App crashed: {connection.Metadata.Name} ({connection.Id})");
 
         // Publish crashed event
         await PublishConnectionStatusChangeAsync(connection, "Crashed");
@@ -669,7 +669,7 @@ public class AppCommunicationServer
     try
     {
       _connections[connectionInfo.Id] = connectionInfo;
-      L.LogInfo($"Registered app connection: {connectionInfo.Metadata.Name} ({connectionInfo.Id})");
+      G.LogInfo($"Registered app connection: {connectionInfo.Metadata.Name} ({connectionInfo.Id})");
     }
     finally
     {

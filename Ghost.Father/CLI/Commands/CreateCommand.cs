@@ -25,15 +25,15 @@ public class CreateCommand : AsyncCommand<CreateCommand.Settings>
 
       // Log available templates
       var templates = _templateManager.GetAvailableTemplates();
-      L.LogDebug($"Loaded {templates.Count} templates:");
+      G.LogDebug($"Loaded {templates.Count} templates:");
       foreach (var template in templates.Values)
       {
-        L.LogDebug($"- {template.Name}: {template.Description}");
+        G.LogDebug($"- {template.Name}: {template.Description}");
       }
     }
     catch (Exception ex)
     {
-      L.LogError(ex, "Failed to initialize template manager");
+      G.LogError(ex, "Failed to initialize template manager");
       throw new GhostException(
           "Failed to initialize templates. Please reinstall Ghost.",
           ex,
@@ -88,20 +88,20 @@ public class CreateCommand : AsyncCommand<CreateCommand.Settings>
 
           if (hasLocalLibs)
           {
-            L.LogInfo($"Using local SDK from: {libsPath}");
+            G.LogInfo($"Using local SDK from: {libsPath}");
           } else if (!settings.UseNuget)
           {
-            L.LogWarn($"Local SDK not found in {libsPath}. Will use NuGet packages.");
+            G.LogWarn($"Local SDK not found in {libsPath}. Will use NuGet packages.");
             settings.UseNuget = true;
           }
         } else if (!settings.UseNuget)
         {
-          L.LogWarn($"Libs directory not found: {libsPath}. Will use NuGet packages.");
+          G.LogWarn($"Libs directory not found: {libsPath}. Will use NuGet packages.");
           settings.UseNuget = true;
         }
       } else if (!settings.UseNuget)
       {
-        L.LogWarn("GHOST_INSTALL environment variable not set. Will use NuGet packages.");
+        G.LogWarn("GHOST_INSTALL environment variable not set. Will use NuGet packages.");
         settings.UseNuget = true;
       }
 
@@ -204,7 +204,7 @@ public class CreateCommand : AsyncCommand<CreateCommand.Settings>
     catch (Exception ex)
     {
       AnsiConsole.MarkupLine($"[red]Unexpected error:[/] {ex.Message}");
-      L.LogError(ex, "Unexpected error during project creation");
+      G.LogError(ex, "Unexpected error during project creation");
       return 1;
     }
   }
@@ -253,7 +253,7 @@ Thumbs.db
       var process = Process.Start(psi);
       if (process == null)
       {
-        L.LogError("Failed to start dotnet restore process");
+        G.LogError("Failed to start dotnet restore process");
         return false;
       }
 
@@ -262,7 +262,7 @@ Thumbs.db
     }
     catch (Exception ex)
     {
-      L.LogError(ex, "Failed to restore packages");
+      G.LogError(ex, "Failed to restore packages");
       return false;
     }
   }

@@ -33,7 +33,7 @@ public static class DotNetHelper
         }
         catch (Exception ex)
         {
-            L.LogError(ex, "Error checking package installation: {Package}", packageName);
+            G.LogError(ex, "Error checking package installation: {Package}", packageName);
             return false;
         }
     }
@@ -70,11 +70,11 @@ public static class DotNetHelper
                     ErrorCode.TemplateError);
             }
 
-            L.LogInfo("Added package {Package} v{Version}", packageName, version);
+            G.LogInfo($"Added package {packageName} v{version}");
         }
         catch (Exception ex) when (ex is not GhostException)
         {
-            L.LogError(ex, "Error adding package: {Package}", packageName);
+            G.LogError(ex, "Error adding package: {Package}", packageName);
             throw new GhostException(
                 $"Failed to add package {packageName}", 
                 ex,
@@ -144,7 +144,7 @@ public static class DotNetHelper
         }
         catch (Exception ex) when (ex is not GhostException)
         {
-            L.LogError(ex, "Error creating project: {Project}", projectName);
+            G.LogError(ex, "Error creating project: {Project}", projectName);
             throw new GhostException(
                 $"Failed to create project {projectName}",
                 ex,
@@ -185,7 +185,7 @@ public static class DotNetHelper
         }
         catch (Exception ex) when (ex is not GhostException)
         {
-            L.LogError(ex, "Error building project at: {Path}", projectPath);
+            G.LogError(ex, "Error building project at: {Path}", projectPath);
             throw new GhostException(
                 $"Failed to build project",
                 ex,
@@ -219,7 +219,7 @@ public static class DotNetHelper
         }
         catch (Exception ex)
         {
-            L.LogError(ex, "Error getting package version: {Package}", packageName);
+            G.LogError(ex, "Error getting package version: {Package}", packageName);
             return null;
         }
     }

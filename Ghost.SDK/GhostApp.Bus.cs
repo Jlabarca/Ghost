@@ -36,7 +36,7 @@ namespace Ghost
             {
                 // Check if this is the daemon itself - skip connection in that case
                 bool isDaemon = GetType().Name == "GhostFatherDaemon" ||
-                               (Config?.App?.Id == "ghost-daemon");
+                               Config?.App.Id == "ghost-daemon";
 
                 if (isDaemon)
                 {

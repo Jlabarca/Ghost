@@ -1,4 +1,3 @@
-using Ghost.Core;
 using Ghost.Core.Config;
 using Ghost.Core.Data;
 using Ghost.Core.Storage;
@@ -96,15 +95,6 @@ public partial class GhostApp : IAsyncDisposable
     GhostProcess.Initialize(this);
 
     StartAsync(args).GetAwaiter().GetResult();
-  }
-
-  /// <summary>
-  /// Creates a builder for configuring a Ghost application
-  /// </summary>
-  /// <returns>A builder for configuration</returns>
-  public static GhostAppBuilder CreateBuilder()
-  {
-    return new GhostAppBuilder();
   }
 
   /// <summary>

@@ -1,4 +1,4 @@
-using Ghost.Core.Exceptions;
+using Ghost.Exceptions;
 using Scriban;
 using Scriban.Runtime;
 using System.Text;

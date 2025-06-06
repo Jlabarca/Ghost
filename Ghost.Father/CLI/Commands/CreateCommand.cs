@@ -1,4 +1,4 @@
-using Ghost.Core.Exceptions;
+using Ghost.Exceptions;
 using Ghost.Templates;
 using Spectre.Console;
 using Spectre.Console.Cli;

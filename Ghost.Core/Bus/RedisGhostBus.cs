@@ -2,11 +2,11 @@ using System.Collections.Concurrent;
 using System.Threading.Channels;
 using System.Runtime.CompilerServices;
 using System.Text.RegularExpressions;
-using Ghost.Core.Exceptions;
+using Ghost.Exceptions;
 using MemoryPack;
 using StackExchange.Redis;
 
-namespace Ghost.Core.Storage
+namespace Ghost.Storage
 {
   /// <summary>
   /// Message priority levels for prioritized message delivery
@@ -173,6 +173,8 @@ namespace Ghost.Core.Storage
 
       var oldState = _connectionState;
       _connectionState = newState;
+      
+      G.LogDebug($"[Bus-Connection] State changing: {oldState} -> {newState} ({reason ?? "No reason"})");
 
       // Notify listeners
       ConnectionStateChanged?.Invoke(this, new ConnectionStateChangedEventArgs(oldState, newState, reason));
@@ -209,6 +211,8 @@ namespace Ghost.Core.Storage
         // Generate unique message ID with counter for better ordering
         int counter = Interlocked.Increment(ref _messageCounter);
         string messageId = $"{DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()}:{counter}:{Guid.NewGuid()}";
+        
+        G.LogDebug($"[Bus-Publish] Publishing message to channel={channel}, priority={priority}, messageId={messageId}");
 
         // Store persistence metadata
         var metadata = new MessageMetadata
@@ -260,6 +264,8 @@ namespace Ghost.Core.Storage
 
             // Fire event
             MessagePublished?.Invoke(this, new MessagePublishedEventArgs(channel, messageId, priority));
+            
+            G.LogDebug($"[Bus-Publish] Successfully published message to channel={channel}, messageId={messageId}");
           }
           catch (Exception ex)
           {
@@ -1216,31 +1222,37 @@ namespace Ghost.Core.Storage
 
     public void OnSuccess()
     {
+      var oldState = State;
       if (State == CircuitBreakerState.HalfOpen)
       {
         // Reset after successful operation in half-open state
         _failureCount = 0;
         _openUntil = DateTime.MinValue;
+        G.LogDebug($"[CircuitBreaker] State transitioned: {oldState} -> {State} after success");
       }
     }
 
     public void OnFailure()
     {
+      var oldState = State;
       _lastFailure = DateTime.UtcNow;
 
       if (State == CircuitBreakerState.HalfOpen)
       {
         // Failed in half-open state, reset timeout
         _openUntil = DateTime.UtcNow.Add(_resetTimeout);
+        G.LogDebug($"[CircuitBreaker] Failed in half-open state, extending circuit open time by {_resetTimeout.TotalSeconds}s");
       } else if (State == CircuitBreakerState.Closed)
       {
         // Increment failure count
         _failureCount++;
+        G.LogDebug($"[CircuitBreaker] Failure count increased to {_failureCount}/{_maxFailures}");
 
         // If threshold reached, open the circuit
         if (_failureCount >= _maxFailures)
         {
           _openUntil = DateTime.UtcNow.Add(_resetTimeout);
+          G.LogDebug($"[CircuitBreaker] State transitioned: {oldState} -> {State}, circuit opened for {_resetTimeout.TotalSeconds}s");
         }
       }
     }

@@ -1,8 +1,8 @@
-// using Ghost.Core.Config;
-// using Ghost.Core.Exceptions;
+// using Ghost.Config;
+// using Ghost.Exceptions;
 // using Microsoft.Extensions.Logging;
 // using System.Collections.Concurrent;
-// namespace Ghost.Core.Data;
+// namespace Ghost.Data;
 //
 // /// <summary>
 // /// Main implementation of state management with persistence and change tracking

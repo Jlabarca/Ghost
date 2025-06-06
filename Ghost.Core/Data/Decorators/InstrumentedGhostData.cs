@@ -1,18 +1,19 @@
+using Ghost.Logging;
 using System.Diagnostics;
-using Ghost.Core.Monitoring;
+using Ghost.Monitoring;
 using Microsoft.Extensions.Logging;
 
-namespace Ghost.Core.Data;
+namespace Ghost.Data;
 
 /// <summary>
 /// Decorator that adds metrics, tracing, and logging to any IGhostData implementation.
 /// Records performance metrics and traces for all data operations.
 /// </summary>
-public class InstrumentedGhostData : IGhostData
+public class InstrumentedGhostData : IGhostData, IAsyncDisposable, IDisposable
 {
     private readonly IGhostData _inner;
     private readonly IMetricsCollector _metrics;
-    private readonly ILogger<InstrumentedGhostData> _logger;
+    private readonly IGhostLogger _logger;
     private bool _disposed;
 
     /// <summary>
@@ -24,7 +25,7 @@ public class InstrumentedGhostData : IGhostData
     public InstrumentedGhostData(
             IGhostData inner,
             IMetricsCollector metrics,
-            ILogger<InstrumentedGhostData> logger)
+            IGhostLogger logger)
     {
         _inner = inner ?? throw new ArgumentNullException(nameof(inner));
         _metrics = metrics ?? throw new ArgumentNullException(nameof(metrics));
@@ -656,7 +657,7 @@ public class InstrumentedGhostData : IGhostData
     /// <summary>
     /// Wraps a transaction with instrumentation.
     /// </summary>
-    private class InstrumentedGhostTransaction : IGhostTransaction
+    private class InstrumentedGhostTransaction : IGhostTransaction, IAsyncDisposable, IDisposable
     {
         private readonly IGhostTransaction _inner;
         private readonly IMetricsCollector _metrics;
@@ -891,28 +892,6 @@ public class InstrumentedGhostData : IGhostData
 
         public async ValueTask DisposeAsync()
         {
-            if (_disposed)
-                return;
-
-            _disposed = true;
-
-            // If the transaction lasted too long, log it as a potential issue
-            if (_transactionTimer.ElapsedMilliseconds > 1000)
-            {
-                _logger.LogWarning("Long-running transaction: {ElapsedMs}ms",
-                        _transactionTimer.ElapsedMilliseconds);
-
-                // Track long-running transaction as a metric
-                await _metrics.TrackMetricAsync(new MetricValue
-                {
-                    Name = "ghost.data.transaction_long_running",
-                    Value = _transactionTimer.ElapsedMilliseconds,
-                    Tags = new Dictionary<string, string> { ["threshold"] = "exceeded" },
-                    Timestamp = DateTime.UtcNow
-                });
-            }
-
-            _transactionTimer.Stop();
             await _inner.DisposeAsync();
         }
 
@@ -1013,7 +992,40 @@ public class InstrumentedGhostData : IGhostData
             if (_disposed)
                 throw new ObjectDisposedException(nameof(InstrumentedGhostTransaction));
         }
+
+        public void Dispose()
+        {
+            if (_disposed)
+                return;
+
+            _disposed = true;
+
+            // Mark as disposed
+            if (_inner is IDisposable disposable)
+            {
+                disposable.Dispose();
+            }
+        }
     }
 
     #endregion
+
+    public void Dispose()
+    {
+        if (_disposed)
+            return;
+
+        _disposed = true;
+
+        try
+        {
+            // If inner implements IDisposable, dispose it synchronously
+            if (_inner is IDisposable disposable)
+                disposable.Dispose();
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error during synchronous disposal");
+        }
+    }
 }

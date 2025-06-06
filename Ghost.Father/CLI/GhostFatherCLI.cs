@@ -1,232 +1,202 @@
+using Ghost.Templates;
 using Microsoft.Extensions.DependencyInjection;
 using Spectre.Console.Cli;
-using Ghost.Core.Storage;
-using Ghost.Core.Data;
-using Ghost.Core.Data.Implementations;
-using Ghost.Templates;
+using Spectre.Console;
 using System.Reflection;
 
-namespace Ghost.Father.CLI;
-
-public class GhostFatherCLI : GhostApp
+namespace Ghost.Father.CLI
 {
-    private CommandApp _app;
-    private TypeRegistrar _registrar;
-    private bool _servicesConfigured = false;
+    #region Spectre.Console DI Adapter
+
+  #endregion
+
+  public class GhostFatherCLI : GhostApp
+  {
+        #region Private Fields
+
+    private CommandApp _spectreCliApp;
+
+        #endregion
+
+        #region GhostApp Overrides
 
     /// <summary>
-    /// Run the CLI with the provided arguments
+    /// Configures CLI-specific services.
+    /// Base services (Config, Bus, Cache) are registered by GhostApp.ConfigureServicesBase.
+    /// </summary>
+    protected override void ConfigureServices(IServiceCollection services)
+    {
+      // Add template manager
+      var templatesPath = GetTemplatesPath();
+      services.AddSingleton(_ => new TemplateManager(templatesPath));
+      G.LogInfo($"TemplateManager registered with path: {templatesPath}");
+
+      // Register all commands.
+      // This assumes CommandRegistry has static methods to register commands
+      // both with IServiceCollection (for DI) and IConfigurator (for Spectre).
+      CommandRegistry.RegisterServices(services); // For DI in commands
+      G.LogInfo("CLI commands registered with DI.");
+    }
+
+    /// <summary>
+    /// Main execution logic for the CLI.
+    /// Sets up and runs the Spectre.Console command application.
     /// </summary>
     public override async Task RunAsync(IEnumerable<string> args)
     {
-        if (args == null)
+      if (args == null)
+      {
+        throw new ArgumentNullException(nameof(args), "Arguments cannot be null for CLI execution.");
+      }
+
+      // Create Spectre.Console TypeRegistrar using the IServiceProvider from the base class
+      // 'this.Services' is the IServiceProvider built by GhostApp
+      var spectreTypeRegistrar = new SpectreServiceProviderAdapter(this.Services);
+
+      _spectreCliApp = new CommandApp(spectreTypeRegistrar);
+      ConfigureSpectreApp(_spectreCliApp);
+
+      var cleanArgs = CleanupArgs(args.ToArray());
+      G.LogDebug($"CLI attempting to run with args: {string.Join(" ", cleanArgs)}");
+
+      try
+      {
+        Environment.ExitCode = await _spectreCliApp.RunAsync(cleanArgs);
+      }
+      catch (CommandParseException ex)
+      {
+        AnsiConsole.MarkupLine($"[red]Error: {ex.Message}[/]");
+        if (ex.Pretty != null)
         {
-            throw new ArgumentNullException(nameof(args), "Arguments cannot be null");
+          AnsiConsole.Write(ex.Pretty);
         }
-
-        // Initialize services
-        ConfigureServices();
-
-        // Create type registrar for Spectre.Console
-        _registrar = new TypeRegistrar(Services);
-
-        // Create command app
-        _app = new CommandApp(_registrar);
-
-        // Configure commands
-        ConfigureCommands(_app);
-
-        G.LogDebug($"Running CLI with args: {string.Join(" ", args)}");
-
-        try
-        {
-            // Fix args if needed
-            var cleanArgs = CleanupArgs(args);
-
-            // Run the command app
-            await _app.RunAsync(cleanArgs);
-        }
-        catch (Exception ex)
-        {
-            G.LogError(ex, "Error executing command");
-            throw;
-        }
+        G.LogError(ex, "Spectre.Console command parsing error.");
+        Environment.ExitCode = -1; // Or a specific error code for parsing errors
+      }
+      catch (Exception ex)
+      {
+        AnsiConsole.WriteException(ex, ExceptionFormats.ShortenPaths);
+        G.LogError(ex, "Error executing Spectre.Console command.");
+        Environment.ExitCode = 1; // General error
+      }
     }
 
-    private void ConfigureServices()
+        #endregion
+
+        #region CLI Specific Methods
+
+    /// <summary>
+    /// Configures the Spectre.Console command application (metadata, commands).
+    /// </summary>
+    private void ConfigureSpectreApp(CommandApp app)
     {
-        if (_servicesConfigured)
-            return;
+      app.Configure(config =>
+      {
+        var assemblyVersion = Assembly.GetExecutingAssembly().GetName().Version;
+        config.SetApplicationName("ghost");
+        config.SetApplicationVersion($"{assemblyVersion?.Major ?? 1}.{assemblyVersion?.Minor ?? 0}.{assemblyVersion?.Build ?? 0}");
 
-        if (Config == null)
-        {
-            throw new ArgumentNullException(nameof(Config), "GhostFather CLI requires a valid GhostConfig");
-        }
+        CommandRegistry.ConfigureCommands(config); // For Spectre.Console command registration
 
-        Services.AddSingleton(Config);
-        Services.AddSingleton<IServiceCollection>(Services);
+        // config.PropagateExceptions(); // Good for debugging during development
+        // config.ValidateExamples(); // If you use examples in command help
+        // config.CaseSensitivity(CaseSensitivity.None); // Optional: make commands case-insensitive
 
-        var cachePath = Path.Combine(
-                Config.Core.DataPath ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Ghost"),
-                "cache");
-        Directory.CreateDirectory(cachePath);
-        var cache = new MemoryCache(G.GetLogger());
-        Services.AddSingleton<ICache>(cache);
-
-        // Configure bus
-        var bus = new GhostBus(cache);
-        Services.AddSingleton<IGhostBus>(bus);
-
-        // Add template manager
-        var templatesPath = GetTemplatesPath();
-        Services.AddSingleton(_ => new TemplateManager(templatesPath));
-
-        // Register all commands from the registry
-        CommandRegistry.RegisterServices(Services);
-
-        _servicesConfigured = true;
-    }
-
-
-    private void ConfigureCommands(CommandApp app)
-    {
-        app.Configure(config =>
-        {
-            // Set metadata
-            var assemblyVersion = Assembly.GetExecutingAssembly().GetName().Version;
-            config.SetApplicationName("ghost");
-            config.SetApplicationVersion($"{assemblyVersion.Major}.{assemblyVersion.Minor}.{assemblyVersion.Build}");
-
-            // Register all commands from registry
-            CommandRegistry.ConfigureCommands(config);
-
-            // Enable exception propagation for better error handling
-            config.PropagateExceptions();
-
-            // Set custom style for console output
-            //config.UseAnsi();
-        });
+                #if DEBUG
+        config.PropagateExceptions();
+        config.ValidateExamples();
+                #endif
+      });
     }
 
     /// <summary>
-    /// Get the path to the templates directory
+    /// Determines the path to the templates directory.
     /// </summary>
     private string GetTemplatesPath()
     {
-        // Check environment variable first
-        var ghostInstallDir = Environment.GetEnvironmentVariable("GHOST_INSTALL");
-        if (!string.IsNullOrEmpty(ghostInstallDir))
-        {
-            var templatesPath = Path.Combine(ghostInstallDir, "templates");
-            if (Directory.Exists(templatesPath))
-            {
-                return templatesPath;
-            }
-        }
+      // Check environment variable first
+      var ghostInstallDir = Environment.GetEnvironmentVariable("GHOST_INSTALL_DIR"); // Consistent naming
+      if (!string.IsNullOrEmpty(ghostInstallDir))
+      {
+        var templatesPath = Path.Combine(ghostInstallDir, "templates");
+        if (Directory.Exists(templatesPath)) return templatesPath;
+      }
 
-        // Check next to the executable
-        var exePath = Assembly.GetExecutingAssembly().Location;
-        var exeDir = Path.GetDirectoryName(exePath);
-        var templatePathNext = Path.Combine(exeDir, "templates");
-        if (Directory.Exists(templatePathNext))
-        {
-            return templatePathNext;
-        }
+      var exePath = Assembly.GetExecutingAssembly().Location;
+      var exeDir = Path.GetDirectoryName(exePath);
+      if (string.IsNullOrEmpty(exeDir)) // Should not happen but good to check
+      {
+        exeDir = Directory.GetCurrentDirectory();
+      }
 
-        // Check parent directories
-        var parent = Directory.GetParent(exeDir);
-        while (parent != null)
-        {
-            var templatePathParent = Path.Combine(parent.FullName, "templates");
-            if (Directory.Exists(templatePathParent))
-            {
-                return templatePathParent;
-            }
-            parent = parent.Parent;
-        }
+      // Check relative to executable
+      var templatePathNextToExe = Path.Combine(exeDir, "templates");
+      if (Directory.Exists(templatePathNextToExe)) return templatePathNextToExe;
 
-        // Fall back to default next to executable and create it
-        G.LogWarn($"Templates directory not found. Creating at: {templatePathNext}");
-        Directory.CreateDirectory(templatePathNext);
+      // Check in parent directories (useful for development scenarios)
+      var parent = Directory.GetParent(exeDir);
+      while (parent != null)
+      {
+        var templatePathInParent = Path.Combine(parent.FullName, "templates");
+        if (Directory.Exists(templatePathInParent)) return templatePathInParent;
+        parent = parent.Parent;
+      }
 
-        // Initialize templates
-        // try
-        // {
-        //     Ghost.Templates.TemplateSetup.EnsureTemplatesExist(exeDir);
-        // }
-        // catch (Exception ex)
-        // {
-        //     G.LogError(ex, "Failed to initialize templates");
-        // }
-
-        return templatePathNext;
+      // Fall back to default next to executable and create it if it doesn't exist
+      G.LogWarn($"Templates directory not found through probing. Defaulting to: {templatePathNextToExe}. It will be created if it doesn't exist.");
+      try
+      {
+        Directory.CreateDirectory(templatePathNextToExe); // Ensure it exists
+      }
+      catch (Exception ex)
+      {
+        G.LogError(ex, $"Failed to create default templates directory at {templatePathNextToExe}.");
+        // Potentially return a path within user's local app data as a last resort
+        var appDataPath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "GhostCLI", "templates");
+        G.LogWarn($"Falling back to templates path: {appDataPath}");
+        Directory.CreateDirectory(appDataPath);
+        return appDataPath;
+      }
+      return templatePathNextToExe;
     }
 
     /// <summary>
-    /// Clean up command line arguments
+    /// Cleans up command line arguments, removing the executable path if present.
     /// </summary>
-    private string[] CleanupArgs(IEnumerable<string> args)
+    private string[] CleanupArgs(string[] args)
     {
-        // If running from dotnet or directly, the first arg might be the executable
-        var argArray = args.ToArray();
-        if (argArray.Length > 0 &&
-            (argArray[0].EndsWith(".dll", StringComparison.OrdinalIgnoreCase) ||
-             argArray[0].EndsWith(".exe", StringComparison.OrdinalIgnoreCase)))
+      if (args.Length > 0)
+      {
+        var firstArg = args[0];
+        // More robust check for executable paths
+        if (firstArg.EndsWith(".dll", StringComparison.OrdinalIgnoreCase) ||
+            firstArg.EndsWith(".exe", StringComparison.OrdinalIgnoreCase))
         {
-            return argArray.Skip(1).ToArray();
+          // Check if it's likely the entry assembly
+          var entryAssemblyLocation = Assembly.GetEntryAssembly()?.Location;
+          if (entryAssemblyLocation != null &&
+              Path.GetFullPath(firstArg).Equals(Path.GetFullPath(entryAssemblyLocation), StringComparison.OrdinalIgnoreCase))
+          {
+            return args.Skip(1).ToArray();
+          }
         }
-
-        return argArray;
+      }
+      return args;
     }
 
-    /// <summary>
-    /// Execute the CLI with the provided arguments
-    /// </summary>
-    public async Task<int> ExecuteAsync(string[] args)
-    {
-        try
-        {
-            // Don't call Execute() directly - it might already be initialized
-            if (State == GhostAppState.Created || State == GhostAppState.Stopped || State == GhostAppState.Failed)
-            {
-                Execute(args);
-            }
-            else
-            {
-                // Already initialized, just run the command
-                await RunAsync(args);
-            }
-            return 0;
-        }
-        catch (Exception ex)
-        {
-            G.LogError(ex, "Error executing CLI");
-            return 1;
-        }
-    }
+        #endregion
 
-    /// <summary>
-    /// Clean up resources
-    /// </summary>
+        #region Disposal
+
     public override async ValueTask DisposeAsync()
     {
-        try
-        {
-            G.LogDebug("Disposing GhostFatherCLI");
-            if (Services.BuildServiceProvider() is IAsyncDisposable disposable)
-            {
-                await disposable.DisposeAsync();
-            }
-            else if (Services.BuildServiceProvider() is IDisposable d)
-            {
-                d.Dispose();
-            }
-
-            await base.DisposeAsync();
-        }
-        catch (Exception ex)
-        {
-            G.LogError(ex, "Error disposing GhostFatherCLI");
-        }
+      G.LogDebug("Disposing GhostFatherCLI specific resources...");
+      // Any CLI specific resources to dispose would go here.
+      // The IServiceProvider and other base resources are handled by GhostApp.DisposeAsync().
+      await base.DisposeAsync();
+      G.LogInfo("GhostFatherCLI disposed.");
     }
+
+        #endregion
+  }
 }

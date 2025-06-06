@@ -1,28 +1,29 @@
-using Ghost.Core.Logging;
 using System.Collections.Concurrent;
+using Ghost.Data;
+using Ghost.Logging;
 using Microsoft.Extensions.Logging;
 
-namespace Ghost.Core.Data.Implementations
+namespace Ghost;
+
+/// <summary>
+/// In-memory implementation of the cache interface.
+/// Useful for development, testing, and as a local L1 cache.
+/// </summary>
+public class MemoryCache : ICache
 {
-  /// <summary>
-  /// In-memory implementation of the cache interface.
-  /// Useful for development, testing, and as a local L1 cache.
-  /// </summary>
-  public class MemoryCache : ICache
-  {
     private class CacheItem
     {
-      public object? Value { get; set; }
-      public DateTime? Expiry { get; set; }
-      public DateTime LastAccessed { get; set; }
+        public object? Value { get; set; }
+        public DateTime? Expiry { get; set; }
+        public DateTime LastAccessed { get; set; }
     }
 
-    private readonly ConcurrentDictionary<string, CacheItem> _cache = new();
-    private readonly IGhostLogger _logger;
-    private readonly TimeSpan _defaultExpiry = TimeSpan.FromHours(1);
-    private readonly TimeSpan _defaultSlidingExpiry = TimeSpan.FromMinutes(20);
-    private readonly Timer _cleanupTimer;
-    private bool _disposed;
+    private readonly ConcurrentDictionary<string, CacheItem> cache = new();
+    private IGhostLogger? logger;
+    private readonly TimeSpan defaultExpiry = TimeSpan.FromHours(1);
+    private readonly TimeSpan defaultSlidingExpiry = TimeSpan.FromMinutes(20);
+    private readonly Timer cleanupTimer;
+    private bool disposed;
 
     /// <summary>
     /// Gets the name of this cache provider.
@@ -37,185 +38,195 @@ namespace Ghost.Core.Data.Implementations
     /// <summary>
     /// Initializes a new instance of the <see cref="MemoryCache"/> class.
     /// </summary>
-    /// <param name="logger">The logger.</param>
-    public MemoryCache(IGhostLogger logger)
+    /// <param name="logger">The logger. Can be null during bootstrap.</param>
+    public MemoryCache(IGhostLogger? logger)
     {
-      _logger = logger ?? throw new ArgumentNullException(nameof(logger));
+        this.logger = logger;
 
-      // Start cleanup timer to remove expired items every 5 minutes
-      _cleanupTimer = new Timer(CleanupExpiredItems, null, TimeSpan.FromMinutes(5), TimeSpan.FromMinutes(5));
+        // Start cleanup timer to remove expired items every 5 minutes
+        cleanupTimer = new Timer(CleanupExpiredItems, null, TimeSpan.FromMinutes(5), TimeSpan.FromMinutes(5));
+    }
+
+    /// <summary>
+    /// Sets or updates the logger for this cache instance.
+    /// This is useful during bootstrap scenarios where the cache is created before the logger.
+    /// </summary>
+    /// <param name="logger">The logger to use.</param>
+    public void SetLogger(IGhostLogger logger)
+    {
+        this.logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
 
     /// <inheritdoc />
     public Task<T?> GetAsync<T>(string key, CancellationToken ct = default)
     {
-      ThrowIfDisposed();
+        ThrowIfDisposed();
 
-      if (_cache.TryGetValue(key, out var item))
-      {
-        if (IsExpired(item))
+        if (cache.TryGetValue(key, out var item))
         {
-          _cache.TryRemove(key, out _);
-          return Task.FromResult<T?>(default);
+            if (IsExpired(item))
+            {
+                cache.TryRemove(key, out _);
+                return Task.FromResult<T?>(default);
+            }
+
+            // Update last accessed time for sliding expiration
+            item.LastAccessed = DateTime.UtcNow;
+
+            if (item.Value is T value)
+            {
+                return Task.FromResult<T?>(value);
+            }
         }
 
-        // Update last accessed time for sliding expiration
-        item.LastAccessed = DateTime.UtcNow;
-
-        if (item.Value is T value)
-        {
-          return Task.FromResult<T?>(value);
-        }
-      }
-
-      return Task.FromResult<T?>(default);
+        return Task.FromResult<T?>(default);
     }
 
     /// <inheritdoc />
     public Task<bool> SetAsync<T>(string key, T value, TimeSpan? expiry = null, CancellationToken ct = default)
     {
-      ThrowIfDisposed();
+        ThrowIfDisposed();
 
-      var expiryTime = expiry.HasValue && expiry.Value > TimeSpan.Zero
-          ? DateTime.UtcNow.Add(expiry.Value)
-          : DateTime.UtcNow.Add(_defaultExpiry);
+        var expiryTime = expiry.HasValue && expiry.Value > TimeSpan.Zero
+                ? DateTime.UtcNow.Add(expiry.Value)
+                : DateTime.UtcNow.Add(defaultExpiry);
 
-      var item = new CacheItem
-      {
-          Value = value,
-          Expiry = expiryTime,
-          LastAccessed = DateTime.UtcNow
-      };
+        var item = new CacheItem
+        {
+                Value = value,
+                Expiry = expiryTime,
+                LastAccessed = DateTime.UtcNow
+        };
 
-      _cache[key] = item;
-      return Task.FromResult(true);
+        cache[key] = item;
+        return Task.FromResult(true);
     }
 
     /// <inheritdoc />
     public Task<bool> DeleteAsync(string key, CancellationToken ct = default)
     {
-      ThrowIfDisposed();
-      return Task.FromResult(_cache.TryRemove(key, out _));
+        ThrowIfDisposed();
+        return Task.FromResult(cache.TryRemove(key, out _));
     }
 
     /// <inheritdoc />
     public Task<bool> ExistsAsync(string key, CancellationToken ct = default)
     {
-      ThrowIfDisposed();
+        ThrowIfDisposed();
 
-      if (_cache.TryGetValue(key, out var item))
-      {
-        if (IsExpired(item))
+        if (cache.TryGetValue(key, out var item))
         {
-          _cache.TryRemove(key, out _);
-          return Task.FromResult(false);
+            if (IsExpired(item))
+            {
+                cache.TryRemove(key, out _);
+                return Task.FromResult(false);
+            }
+
+            return Task.FromResult(true);
         }
 
-        return Task.FromResult(true);
-      }
-
-      return Task.FromResult(false);
+        return Task.FromResult(false);
     }
 
     /// <inheritdoc />
     public Task<IDictionary<string, T?>> GetManyAsync<T>(IEnumerable<string> keys, CancellationToken ct = default)
     {
-      ThrowIfDisposed();
+        ThrowIfDisposed();
 
-      var result = new Dictionary<string, T?>();
+        var result = new Dictionary<string, T?>();
 
-      foreach (var key in keys)
-      {
-        if (_cache.TryGetValue(key, out var item))
+        foreach (var key in keys)
         {
-          if (IsExpired(item))
-          {
-            _cache.TryRemove(key, out _);
-            continue;
-          }
+            if (cache.TryGetValue(key, out var item))
+            {
+                if (IsExpired(item))
+                {
+                    cache.TryRemove(key, out _);
+                    continue;
+                }
 
-          // Update last accessed time for sliding expiration
-          item.LastAccessed = DateTime.UtcNow;
+                // Update last accessed time for sliding expiration
+                item.LastAccessed = DateTime.UtcNow;
 
-          if (item.Value is T value)
-          {
-            result[key] = value;
-          }
+                if (item.Value is T value)
+                {
+                    result[key] = value;
+                }
+            }
         }
-      }
 
-      return Task.FromResult<IDictionary<string, T?>>(result);
+        return Task.FromResult<IDictionary<string, T?>>(result);
     }
 
     /// <inheritdoc />
     public Task<bool> SetManyAsync<T>(IDictionary<string, T> items, TimeSpan? expiry = null, CancellationToken ct = default)
     {
-      ThrowIfDisposed();
+        ThrowIfDisposed();
 
-      var expiryTime = expiry.HasValue && expiry.Value > TimeSpan.Zero
-          ? DateTime.UtcNow.Add(expiry.Value)
-          : DateTime.UtcNow.Add(_defaultExpiry);
+        var expiryTime = expiry.HasValue && expiry.Value > TimeSpan.Zero
+                ? DateTime.UtcNow.Add(expiry.Value)
+                : DateTime.UtcNow.Add(defaultExpiry);
 
-      foreach (var (key, value) in items)
-      {
-        var item = new CacheItem
+        foreach (var (key, value) in items)
         {
-            Value = value,
-            Expiry = expiryTime,
-            LastAccessed = DateTime.UtcNow
-        };
+            var item = new CacheItem
+            {
+                    Value = value,
+                    Expiry = expiryTime,
+                    LastAccessed = DateTime.UtcNow
+            };
 
-        _cache[key] = item;
-      }
+            cache[key] = item;
+        }
 
-      return Task.FromResult(true);
+        return Task.FromResult(true);
     }
 
     /// <inheritdoc />
     public Task<int> DeleteManyAsync(IEnumerable<string> keys, CancellationToken ct = default)
     {
-      ThrowIfDisposed();
+        ThrowIfDisposed();
 
-      var count = 0;
+        var count = 0;
 
-      foreach (var key in keys)
-      {
-        if (_cache.TryRemove(key, out _))
+        foreach (var key in keys)
         {
-          count++;
+            if (cache.TryRemove(key, out _))
+            {
+                count++;
+            }
         }
-      }
 
-      return Task.FromResult(count);
+        return Task.FromResult(count);
     }
 
     /// <inheritdoc />
     public Task<bool> UpdateExpiryAsync(string key, TimeSpan expiry, CancellationToken ct = default)
     {
-      ThrowIfDisposed();
+        ThrowIfDisposed();
 
-      if (_cache.TryGetValue(key, out var item))
-      {
-        if (IsExpired(item))
+        if (cache.TryGetValue(key, out var item))
         {
-          _cache.TryRemove(key, out _);
-          return Task.FromResult(false);
+            if (IsExpired(item))
+            {
+                cache.TryRemove(key, out _);
+                return Task.FromResult(false);
+            }
+
+            item.Expiry = DateTime.UtcNow.Add(expiry);
+            return Task.FromResult(true);
         }
 
-        item.Expiry = DateTime.UtcNow.Add(expiry);
-        return Task.FromResult(true);
-      }
-
-      return Task.FromResult(false);
+        return Task.FromResult(false);
     }
 
     /// <inheritdoc />
     public Task<bool> ClearAsync(CancellationToken ct = default)
     {
-      ThrowIfDisposed();
+        ThrowIfDisposed();
 
-      _cache.Clear();
-      return Task.FromResult(true);
+        cache.Clear();
+        return Task.FromResult(true);
     }
 
     /// <summary>
@@ -223,18 +234,18 @@ namespace Ghost.Core.Data.Implementations
     /// </summary>
     private bool IsExpired(CacheItem item)
     {
-      if (item.Expiry.HasValue && item.Expiry.Value <= DateTime.UtcNow)
-      {
-        return true;
-      }
+        if (item.Expiry.HasValue && item.Expiry.Value <= DateTime.UtcNow)
+        {
+            return true;
+        }
 
-      // Check sliding expiration - if item hasn't been accessed in _defaultSlidingExpiry
-      if (DateTime.UtcNow - item.LastAccessed > _defaultSlidingExpiry)
-      {
-        return true;
-      }
+        // Check sliding expiration - if item hasn't been accessed in _defaultSlidingExpiry
+        if (DateTime.UtcNow - item.LastAccessed > defaultSlidingExpiry)
+        {
+            return true;
+        }
 
-      return false;
+        return false;
     }
 
     /// <summary>
@@ -242,26 +253,39 @@ namespace Ghost.Core.Data.Implementations
     /// </summary>
     private void CleanupExpiredItems(object? state)
     {
-      try
-      {
-        if (_disposed) return;
-
-        var keysToRemove = _cache
-            .Where(kvp => IsExpired(kvp.Value))
-            .Select(kvp => kvp.Key)
-            .ToList();
-
-        foreach (var key in keysToRemove)
+        try
         {
-          _cache.TryRemove(key, out _);
-        }
+            if (disposed) return;
 
-        _logger.LogTrace("Cleaned up {Count} expired items from memory cache", keysToRemove.Count);
-      }
-      catch (Exception ex)
-      {
-        _logger.LogError(ex, "Error cleaning up expired items from memory cache");
-      }
+            var keysToRemove = cache
+                    .Where(kvp => IsExpired(kvp.Value))
+                    .Select(kvp => kvp.Key)
+                    .ToList();
+
+            foreach (var key in keysToRemove)
+            {
+                cache.TryRemove(key, out _);
+            }
+
+            // Only log if logger is available
+            if (logger != null)
+            {
+                logger.LogTrace("Cleaned up {Count} expired items from memory cache", keysToRemove.Count);
+            }
+        }
+        catch (Exception ex)
+        {
+            // Only log if logger is available
+            if (logger != null)
+            {
+                logger.LogError(ex, "Error cleaning up expired items from memory cache");
+            }
+            else
+            {
+                // Fallback to console if no logger available
+                Console.WriteLine($"Error cleaning up expired items from memory cache: {ex.Message}");
+            }
+        }
     }
 
     /// <summary>
@@ -269,19 +293,18 @@ namespace Ghost.Core.Data.Implementations
     /// </summary>
     private void ThrowIfDisposed()
     {
-      if (_disposed)
-        throw new ObjectDisposedException(nameof(MemoryCache));
+        if (disposed)
+            throw new ObjectDisposedException(nameof(MemoryCache));
     }
 
     /// <inheritdoc />
     public async ValueTask DisposeAsync()
     {
-      if (_disposed) return;
+        if (disposed) return;
 
-      _disposed = true;
+        disposed = true;
 
-      await _cleanupTimer.DisposeAsync();
-      _cache.Clear();
+        await cleanupTimer.DisposeAsync();
+        cache.Clear();
     }
-  }
 }

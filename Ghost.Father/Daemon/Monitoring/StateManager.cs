@@ -1,6 +1,6 @@
-using Ghost.Core;
-using Ghost.Core.Data;
-using Ghost.Core.Monitoring;
+using Ghost;
+using Ghost.Data;
+using Ghost.Monitoring;
 using System.Text.Json;
 
 namespace Ghost.Father;

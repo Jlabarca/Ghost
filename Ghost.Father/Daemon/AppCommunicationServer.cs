@@ -1,5 +1,5 @@
-using Ghost.Core;
-using Ghost.Core.Storage;
+using Ghost;
+using Ghost.Storage;
 using MemoryPack;
 using System.Collections.Concurrent;
 namespace Ghost.Father.Daemon;
@@ -25,30 +25,256 @@ public class AppCommunicationServer
     _stateManager = stateManager ?? throw new ArgumentNullException(nameof(stateManager));
   }
 
-  /// <summary>
-  /// Start the communication server
-  /// </summary>
-  public async Task StartAsync(CancellationToken cancellationToken)
-  {
+// Add these enhanced logging methods to AppCommunicationServer.cs
+
+/// <summary>
+/// Start the communication server
+/// </summary>
+public async Task StartAsync(CancellationToken cancellationToken)
+{
     await _lock.WaitAsync(cancellationToken);
     try
     {
-      if (_isRunning) return;
-      _isRunning = true;
+        if (_isRunning) return;
+        _isRunning = true;
 
-      // Start listeners for different message types
-      _ = Task.Run(() => ListenForHeartbeatsAsync(_cts.Token), _cts.Token);
-      _ = Task.Run(() => ListenForMetricsAsync(_cts.Token), _cts.Token);
-      _ = Task.Run(() => ListenForHealthUpdatesAsync(_cts.Token), _cts.Token);
-      _ = Task.Run(() => ListenForSystemEventsAsync(_cts.Token), _cts.Token);
+        G.LogInfo("Starting app communication server...");
+        G.LogInfo($"Bus type: {_bus.GetType().Name}");
 
-      G.LogInfo("App communication server started");
+        // Start listeners for different message types
+        G.LogInfo("Starting heartbeat listener...");
+        _ = Task.Run(() => ListenForHeartbeatsAsync(_cts.Token), _cts.Token);
+
+        G.LogInfo("Starting metrics listener...");
+        _ = Task.Run(() => ListenForMetricsAsync(_cts.Token), _cts.Token);
+
+        G.LogInfo("Starting health updates listener...");
+        _ = Task.Run(() => ListenForHealthUpdatesAsync(_cts.Token), _cts.Token);
+
+        G.LogInfo("Starting system events listener...");
+        _ = Task.Run(() => ListenForSystemEventsAsync(_cts.Token), _cts.Token);
+
+        G.LogInfo("App communication server started successfully");
+        G.LogInfo($"Currently tracking {_connections.Count} connections");
     }
     finally
     {
-      _lock.Release();
+        _lock.Release();
     }
-  }
+}
+
+/// <summary>
+/// Listen for heartbeat messages from ghost apps
+/// </summary>
+private async Task ListenForHeartbeatsAsync(CancellationToken cancellationToken)
+{
+    try
+    {
+        G.LogInfo("Heartbeat listener started - subscribing to ghost:health:*");
+
+        await foreach (var message in _bus.SubscribeAsync<object>("ghost:health:*", cancellationToken))
+        {
+            try
+            {
+                var topic = _bus.GetLastTopic();
+                var appId = topic.Substring("ghost:health:".Length);
+
+                G.LogDebug($"Received heartbeat message from {appId} on topic {topic}");
+
+                // Try to deserialize the message using MemoryPack
+                HeartbeatMessage heartbeat = null;
+
+                if (message is byte[] memoryPackBytes)
+                {
+                    G.LogDebug($"Deserializing heartbeat as byte array for {appId}");
+                    heartbeat = MemoryPackSerializer.Deserialize<HeartbeatMessage>(memoryPackBytes);
+                }
+                else if (message is HeartbeatMessage directHeartbeat)
+                {
+                    G.LogDebug($"Received direct heartbeat message for {appId}");
+                    heartbeat = directHeartbeat;
+                }
+                else
+                {
+                    // Try to convert the message to bytes and deserialize
+                    try
+                    {
+                        G.LogDebug($"Attempting to serialize/deserialize heartbeat for {appId}");
+                        byte[] serialized = MemoryPackSerializer.Serialize(message);
+                        heartbeat = MemoryPackSerializer.Deserialize<HeartbeatMessage>(serialized);
+                    }
+                    catch (Exception ex)
+                    {
+                        G.LogWarn($"Could not deserialize heartbeat message for {appId}: {ex.Message}");
+                    }
+                }
+
+                if (heartbeat != null)
+                {
+                    G.LogInfo($"Processing heartbeat from {appId}: Status={heartbeat.Status}");
+                    await UpdateConnectionFromHeartbeatAsync(heartbeat);
+                }
+                else
+                {
+                    G.LogWarn($"Failed to deserialize heartbeat from {appId}");
+                }
+            }
+            catch (Exception ex)
+            {
+                G.LogError(ex, "Error processing heartbeat message");
+            }
+        }
+    }
+    catch (OperationCanceledException)
+    {
+        G.LogInfo("Heartbeat listener cancelled");
+    }
+    catch (Exception ex)
+    {
+        G.LogError(ex, "Fatal error in heartbeat listener");
+    }
+}
+
+/// <summary>
+/// Listen for metrics messages from ghost apps
+/// </summary>
+private async Task ListenForMetricsAsync(CancellationToken cancellationToken)
+{
+    try
+    {
+        G.LogInfo("Metrics listener started - subscribing to ghost:metrics:*");
+
+        await foreach (var message in _bus.SubscribeAsync<object>("ghost:metrics:*", cancellationToken))
+        {
+            try
+            {
+                var topic = _bus.GetLastTopic();
+                var appId = topic.Substring("ghost:metrics:".Length);
+
+                // Skip daemon's own metrics
+                if (appId == "ghost-daemon") continue;
+
+                G.LogDebug($"Received metrics message from {appId} on topic {topic}");
+
+                // Try to deserialize the message using MemoryPack
+                ProcessMetrics metrics = null;
+
+                if (message is byte[] memoryPackBytes)
+                {
+                    G.LogDebug($"Deserializing metrics as byte array for {appId}");
+                    metrics = MemoryPackSerializer.Deserialize<ProcessMetrics>(memoryPackBytes);
+                }
+                else if (message is ProcessMetrics directMetrics)
+                {
+                    G.LogDebug($"Received direct metrics message for {appId}");
+                    metrics = directMetrics;
+                }
+                else
+                {
+                    // Try to convert the message to bytes and deserialize
+                    try
+                    {
+                        G.LogDebug($"Attempting to serialize/deserialize metrics for {appId}");
+                        byte[] serialized = MemoryPackSerializer.Serialize(message);
+                        metrics = MemoryPackSerializer.Deserialize<ProcessMetrics>(serialized);
+                    }
+                    catch (Exception ex)
+                    {
+                        G.LogWarn($"Could not deserialize metrics message for {appId}: {ex.Message}");
+                    }
+                }
+
+                if (metrics != null)
+                {
+                    G.LogDebug($"Processing metrics from {appId}: CPU={metrics.CpuPercentage:F1}%, Memory={metrics.MemoryBytes / 1024 / 1024}MB");
+                    await UpdateConnectionMetricsAsync(appId, metrics);
+                }
+                else
+                {
+                    G.LogWarn($"Failed to deserialize metrics from {appId}");
+                }
+            }
+            catch (Exception ex)
+            {
+                G.LogError(ex, "Error processing metrics message");
+            }
+        }
+    }
+    catch (OperationCanceledException)
+    {
+        G.LogInfo("Metrics listener cancelled");
+    }
+    catch (Exception ex)
+    {
+        G.LogError(ex, "Fatal error in metrics listener");
+    }
+}
+
+/// <summary>
+/// Listen for system events from ghost apps
+/// </summary>
+private async Task ListenForSystemEventsAsync(CancellationToken cancellationToken)
+{
+    try
+    {
+        G.LogInfo("System events listener started - subscribing to ghost:events");
+
+        await foreach (var systemEvent in _bus.SubscribeAsync<SystemEvent>("ghost:events", cancellationToken))
+        {
+            try
+            {
+                if (systemEvent == null) continue;
+
+                G.LogInfo($"Received system event: Type={systemEvent.Type}, ProcessId={systemEvent.ProcessId}");
+
+                switch (systemEvent.Type)
+                {
+                    case "process.registered":
+                        G.LogInfo($"Processing process registration event for {systemEvent.ProcessId}");
+                        await HandleProcessRegistrationEventAsync(systemEvent);
+                        break;
+                    case "process.stopped":
+                        G.LogInfo($"Processing process stopped event for {systemEvent.ProcessId}");
+                        await HandleProcessStoppedEventAsync(systemEvent);
+                        break;
+                    case "process.crashed":
+                        G.LogWarn($"Processing process crashed event for {systemEvent.ProcessId}");
+                        await HandleProcessCrashedEventAsync(systemEvent);
+                        break;
+                    default:
+                        G.LogDebug($"Unhandled system event type: {systemEvent.Type}");
+                        break;
+                }
+            }
+            catch (Exception ex)
+            {
+                G.LogError(ex, "Error processing system event");
+            }
+        }
+    }
+    catch (OperationCanceledException)
+    {
+        G.LogInfo("System events listener cancelled");
+    }
+    catch (Exception ex)
+    {
+        G.LogError(ex, "Fatal error in system event listener");
+    }
+}
+
+/// <summary>
+/// Get all active connections
+/// </summary>
+public IEnumerable<AppConnectionInfo> GetActiveConnections()
+{
+    var activeConnections = _connections.Values
+        .Where(c => DateTime.UtcNow - c.LastSeen < _connectionTimeout)
+        .ToList();
+
+    G.LogDebug($"Returning {activeConnections.Count} active connections out of {_connections.Count} total");
+
+    return activeConnections;
+}
 
   /// <summary>
   /// Stop the communication server
@@ -109,12 +335,6 @@ public class AppCommunicationServer
   /// <summary>
   /// Get all active connections
   /// </summary>
-  public IEnumerable<AppConnectionInfo> GetActiveConnections()
-  {
-    return _connections.Values
-        .Where(c => DateTime.UtcNow - c.LastSeen < _connectionTimeout)
-        .ToList();
-  }
 
   /// <summary>
   /// Get connection info for a specific app by ID
@@ -181,62 +401,6 @@ public class AppCommunicationServer
   /// <summary>
   /// Listen for heartbeat messages from ghost apps
   /// </summary>
-  private async Task ListenForHeartbeatsAsync(CancellationToken cancellationToken)
-  {
-    try
-    {
-      await foreach (var message in _bus.SubscribeAsync<object>("ghost:health:*", cancellationToken))
-      {
-        try
-        {
-          var topic = _bus.GetLastTopic();
-          var appId = topic.Substring("ghost:health:".Length);
-
-          // Try to deserialize the message using MemoryPack
-          HeartbeatMessage heartbeat = null;
-
-          if (message is byte[] memoryPackBytes)
-          {
-            heartbeat = MemoryPackSerializer.Deserialize<HeartbeatMessage>(memoryPackBytes);
-          }
-          else if (message is HeartbeatMessage directHeartbeat)
-          {
-            heartbeat = directHeartbeat;
-          }
-          else
-          {
-            // Try to convert the message to bytes and deserialize
-            try
-            {
-              byte[] serialized = MemoryPackSerializer.Serialize(message);
-              heartbeat = MemoryPackSerializer.Deserialize<HeartbeatMessage>(serialized);
-            }
-            catch
-            {
-              G.LogWarn($"Could not deserialize heartbeat message for {appId}");
-            }
-          }
-
-          if (heartbeat != null)
-          {
-            await UpdateConnectionFromHeartbeatAsync(heartbeat);
-          }
-        }
-        catch (Exception ex)
-        {
-          G.LogError(ex, "Error processing heartbeat message");
-        }
-      }
-    }
-    catch (OperationCanceledException)
-    {
-      // Normal cancellation
-    }
-    catch (Exception ex)
-    {
-      G.LogError(ex, "Fatal error in heartbeat listener");
-    }
-  }
 
   /// <summary>
   /// Update connection info from a heartbeat message
@@ -262,8 +426,7 @@ public class AppCommunicationServer
           G.LogInfo($"App reconnected: {connection.Metadata.Name} ({connection.Id})");
           await PublishConnectionStatusChangeAsync(connection, "Connected");
         }
-      }
-      else
+      } else
       {
         // Auto-register unknown connections
         var newConnection = new AppConnectionInfo
@@ -296,65 +459,6 @@ public class AppCommunicationServer
   /// <summary>
   /// Listen for metrics messages from ghost apps
   /// </summary>
-  private async Task ListenForMetricsAsync(CancellationToken cancellationToken)
-  {
-    try
-    {
-      await foreach (var message in _bus.SubscribeAsync<object>("ghost:metrics:*", cancellationToken))
-      {
-        try
-        {
-          var topic = _bus.GetLastTopic();
-          var appId = topic.Substring("ghost:metrics:".Length);
-
-          // Skip daemon's own metrics
-          if (appId == "ghost-daemon") continue;
-
-          // Try to deserialize the message using MemoryPack
-          ProcessMetrics metrics = null;
-
-          if (message is byte[] memoryPackBytes)
-          {
-            metrics = MemoryPackSerializer.Deserialize<ProcessMetrics>(memoryPackBytes);
-          }
-          else if (message is ProcessMetrics directMetrics)
-          {
-            metrics = directMetrics;
-          }
-          else
-          {
-            // Try to convert the message to bytes and deserialize
-            try
-            {
-              byte[] serialized = MemoryPackSerializer.Serialize(message);
-              metrics = MemoryPackSerializer.Deserialize<ProcessMetrics>(serialized);
-            }
-            catch
-            {
-              G.LogWarn($"Could not deserialize metrics message for {appId}");
-            }
-          }
-
-          if (metrics != null)
-          {
-            await UpdateConnectionMetricsAsync(appId, metrics);
-          }
-        }
-        catch (Exception ex)
-        {
-          G.LogError(ex, "Error processing metrics message");
-        }
-      }
-    }
-    catch (OperationCanceledException)
-    {
-      // Normal cancellation
-    }
-    catch (Exception ex)
-    {
-      G.LogError(ex, "Fatal error in metrics listener");
-    }
-  }
 
   /// <summary>
   /// Update connection metrics
@@ -383,8 +487,7 @@ public class AppCommunicationServer
         // Save metrics to state manager
         var appType = connection.Metadata.Configuration.TryGetValue("AppType", out var type) ? type : "unknown";
         await _stateManager.SaveProcessMetricsAsync(appId, metrics, appType);
-      }
-      else
+      } else
       {
         // Auto-register unknown connections with minimal info
         var newConnection = new AppConnectionInfo
@@ -438,12 +541,10 @@ public class AppCommunicationServer
           if (message is byte[] memoryPackBytes)
           {
             healthStatus = MemoryPackSerializer.Deserialize<HealthStatusMessage>(memoryPackBytes);
-          }
-          else if (message is HealthStatusMessage directStatus)
+          } else if (message is HealthStatusMessage directStatus)
           {
             healthStatus = directStatus;
-          }
-          else
+          } else
           {
             // Try to convert the message to bytes and deserialize
             try
@@ -503,8 +604,7 @@ public class AppCommunicationServer
           G.LogInfo($"App reconnected via health status: {connection.Metadata.Name} ({connection.Id})");
           await PublishConnectionStatusChangeAsync(connection, "Connected");
         }
-      }
-      else
+      } else
       {
         // Auto-register unknown connections
         var newConnection = new AppConnectionInfo
@@ -538,44 +638,6 @@ public class AppCommunicationServer
   /// <summary>
   /// Listen for system events from ghost apps
   /// </summary>
-  private async Task ListenForSystemEventsAsync(CancellationToken cancellationToken)
-  {
-    try
-    {
-      await foreach (var systemEvent in _bus.SubscribeAsync<SystemEvent>("ghost:events", cancellationToken))
-      {
-        try
-        {
-          if (systemEvent == null) continue;
-
-          switch (systemEvent.Type)
-          {
-            case "process.registered":
-              await HandleProcessRegistrationEventAsync(systemEvent);
-              break;
-            case "process.stopped":
-              await HandleProcessStoppedEventAsync(systemEvent);
-              break;
-            case "process.crashed":
-              await HandleProcessCrashedEventAsync(systemEvent);
-              break;
-          }
-        }
-        catch (Exception ex)
-        {
-          G.LogError(ex, "Error processing system event");
-        }
-      }
-    }
-    catch (OperationCanceledException)
-    {
-      // Normal cancellation
-    }
-    catch (Exception ex)
-    {
-      G.LogError(ex, "Fatal error in system event listener");
-    }
-  }
 
   /// <summary>
   /// Handle process registration event
@@ -592,8 +654,7 @@ public class AppCommunicationServer
       if (systemEvent.Data is byte[] memoryPackBytes)
       {
         registration = MemoryPackSerializer.Deserialize<ProcessRegistration>(memoryPackBytes);
-      }
-      else
+      } else
       {
         // Try to serialize the data object and then deserialize as ProcessRegistration
         byte[] serialized = MemoryPackSerializer.Serialize(systemEvent.Data);

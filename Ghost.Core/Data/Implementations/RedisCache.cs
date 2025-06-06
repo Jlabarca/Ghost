@@ -1,4 +1,4 @@
-using Ghost.Core.Logging;
+using Ghost.Logging;
 using System;
 using System.Collections.Generic;
 using System.Text.Json;
@@ -7,7 +7,7 @@ using System.Threading.Tasks;
 using Microsoft.Extensions.Logging;
 using StackExchange.Redis;
 
-namespace Ghost.Core.Data.Implementations
+namespace Ghost.Data.Implementations
 {
   /// <summary>
   /// Redis implementation of the cache interface.

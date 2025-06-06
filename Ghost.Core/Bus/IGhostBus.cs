@@ -1,4 +1,4 @@
-namespace Ghost.Core.Storage
+namespace Ghost.Storage
 {
     /// <summary>
     /// Message bus interface for pub/sub communication between Ghost components

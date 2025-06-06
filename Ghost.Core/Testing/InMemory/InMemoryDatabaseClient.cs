@@ -1,11 +1,11 @@
-using Ghost.Core.Data;
+using Ghost.Data;
 using Microsoft.Extensions.Logging;
-namespace Ghost.Core.Testing.InMemory;
+namespace Ghost.Testing.InMemory;
 
 /// <summary>
 /// In-memory implementation of IDatabaseClient for testing purposes.
 /// </summary>
-internal class InMemoryDatabaseClient : IDatabaseClient
+public class InMemoryDatabaseClient : IDatabaseClient
 {
   private readonly InMemoryGhostData _data;
   private readonly ILogger _logger;

@@ -1,8 +1,8 @@
-using Ghost.Core.Data;
+using Ghost.Data;
 using System.Collections.Concurrent;
 using Microsoft.Extensions.Logging;
 
-namespace Ghost.Core.Testing.InMemory
+namespace Ghost.Testing.InMemory
 {
     /// <summary>
     /// In-memory implementation of IGhostData for testing purposes.

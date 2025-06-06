@@ -1,7 +1,7 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
 
-namespace Ghost.Core.Monitoring;
+namespace Ghost.Monitoring;
 
 public class MetricsCollector : IMetricsCollector
 {

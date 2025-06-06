@@ -1,4 +1,4 @@
-namespace Ghost.Core.Monitoring;
+namespace Ghost.Monitoring;
 
 // Metric reading record for storing metrics
 public record MetricValue(string ProcessCpu, double TotalSeconds, Dictionary<string, string> Dictionary, DateTime Timestamp)

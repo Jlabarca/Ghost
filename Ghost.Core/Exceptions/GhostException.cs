@@ -1,4 +1,4 @@
-namespace Ghost.Core.Exceptions;
+namespace Ghost.Exceptions;
 
 public enum ErrorCode
 {

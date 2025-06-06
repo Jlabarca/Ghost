@@ -1,4 +1,4 @@
-namespace Ghost.Core.Data;
+namespace Ghost.Data;
 
 /// <summary>
 /// Interface for cache providers, supporting both memory and distributed caches.

@@ -1,5 +1,5 @@
 using System.Diagnostics;
-using Ghost.Core.Exceptions;
+using Ghost.Exceptions;
 using System.Text.Json;
 using Spectre.Console;
 

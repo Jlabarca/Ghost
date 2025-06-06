@@ -1,4 +1,4 @@
-namespace Ghost.Core.Modules;
+namespace Ghost.Modules;
 
 public abstract class ModuleConfig
 {

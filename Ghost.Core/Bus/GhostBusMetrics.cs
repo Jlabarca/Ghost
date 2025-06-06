@@ -1,5 +1,5 @@
 using System.Collections.Concurrent;
-namespace Ghost.Core.Storage.Metrics;
+namespace Ghost.Storage.Metrics;
 
 public class GhostBusMetrics : IGhostBusMetrics
 {

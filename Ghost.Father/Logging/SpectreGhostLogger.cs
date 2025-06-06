@@ -1,11 +1,11 @@
-using Ghost.Core.Data;
+using Ghost.Data;
 using Microsoft.Extensions.Logging;
 using Spectre.Console;
 using System.Collections.Concurrent;
 using System.Text.Json;
 using System.Runtime.CompilerServices;
 
-namespace Ghost.Core.Logging;
+namespace Ghost.Logging;
 
 public class SpectreGhostLogger : IGhostLogger
 {
@@ -38,6 +38,12 @@ public class SpectreGhostLogger : IGhostLogger
     public void SetCache(ICache cache)
     {
         _cache = cache;
+    }
+
+    public void SetLogLevel(LogLevel logLevel)
+    {
+        _config.LogLevel = logLevel;
+        AnsiConsole.MarkupLine($"[bold green]Log level set to {logLevel}[/]");
     }
 
     public IDisposable? BeginScope<TState>(TState state) where TState : notnull => default;

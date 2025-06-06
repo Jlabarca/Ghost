@@ -1,5 +1,5 @@
 using Microsoft.Extensions.Logging;
-namespace Ghost.Core.Logging;
+namespace Ghost.Logging;
 
 public class LogEntry
 {

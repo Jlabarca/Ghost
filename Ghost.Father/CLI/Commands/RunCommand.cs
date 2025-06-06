@@ -1,5 +1,5 @@
-using Ghost.Core;
-using Ghost.Core.Storage;
+using Ghost;
+using Ghost.Storage;
 using Spectre.Console;
 using Spectre.Console.Cli;
 using System.ComponentModel;

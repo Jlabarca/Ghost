@@ -1,5 +1,5 @@
 using MemoryPack;
-namespace Ghost.Core;
+namespace Ghost;
 
 //AKA ProcessInfoSnapshot
 [MemoryPackable]
@@ -14,6 +14,7 @@ public partial class ProcessState
   public ProcessMetrics? LastMetrics { get; set; }
   public DateTime LastSeen { get; set; } = DateTime.UtcNow;
   public ProcessStatus Status { get; set; }
+  public int? RestartCount { get; set; }
 }
 
 public enum ProcessStatus

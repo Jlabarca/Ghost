@@ -3,9 +3,9 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
-using Ghost.Core.Monitoring;
+using Ghost.Monitoring;
 
-namespace Ghost.Core.Testing.InMemory;
+namespace Ghost.Testing.InMemory;
 
 /// <summary>
 /// In-memory metrics collector for testing.

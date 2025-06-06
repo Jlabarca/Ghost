@@ -1,5 +1,5 @@
 
-namespace Ghost.Core.Data;
+namespace Ghost.Data;
 
 /// <summary>
 /// Provides core data operations for the Ghost environment.

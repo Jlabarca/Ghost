@@ -1,10 +1,10 @@
-using Ghost.Core.Data;
+using Ghost.Data;
 using Microsoft.Extensions.Logging;
 using System.Collections.Concurrent;
 using System.Runtime.CompilerServices;
 using System.Text.Json;
 
-namespace Ghost.Core.Logging;
+namespace Ghost.Logging;
 
 /// <summary>
 /// Base implementation of Ghost logger without external UI dependencies
@@ -69,7 +69,7 @@ public class DefaultGhostLogger : IGhostLogger
       }
   };
 
-  public DefaultGhostLogger(GhostLoggerConfiguration config )
+  public DefaultGhostLogger(GhostLoggerConfiguration config)
   {
     _config = config;
     _processId = Guid.NewGuid().ToString();
@@ -82,6 +82,14 @@ public class DefaultGhostLogger : IGhostLogger
   public void SetCache(ICache cache)
   {
     _cache = cache;
+  }
+  public void SetLogLevel(LogLevel initialLogLevel)
+  {
+    if (_config.LogLevel != initialLogLevel)
+    {
+      _config.LogLevel = initialLogLevel;
+      LogInternal($"Log level set to {initialLogLevel}", LogLevel.Information, null, "", 0);
+    }
   }
 
   public IDisposable? BeginScope<TState>(TState state) where TState : notnull => default;
@@ -183,42 +191,44 @@ public class DefaultGhostLogger : IGhostLogger
     {
       var timestamp = entry.Timestamp.ToString("HH:mm:ss.fff");
       var levelName = LogLevelNames.GetValueOrDefault(entry.Level, "UNKNOWN");
+      var levelColor = LogLevelColors.GetValueOrDefault(entry.Level, ConsoleColor.White);
 
-      // Set color based on log level
-      Console.ForegroundColor = LogLevelColors.GetValueOrDefault(entry.Level, ConsoleColor.White);
+      // 1. Timestamp (White)
+      Console.ForegroundColor = ConsoleColor.White;
+      Console.Write(timestamp);
+      Console.Write(" ");
 
-      // Write the main log message
-      Console.Write($"{timestamp} [{levelName}] {entry.Message} ");
+      // 2. Log Level (e.g., [DEBUG]) (Level-specific color)
+      Console.ForegroundColor = levelColor;
+      Console.Write($"[{levelName}]");
+      Console.Write(" ");
 
-      // Format source location with hyperlink
+      // 3. Log Message (White)
+      Console.ForegroundColor = ConsoleColor.White;
+      Console.Write(entry.Message);
+
+      // 4. Source Location (e.g., [GhostFatherCLI.cs:39]) (Level-specific color)
       if (_config.ShowSourceLocation && !string.IsNullOrEmpty(entry.SourceFilePath))
       {
-        // Get the filename and full path
+        Console.Write(" ");
         string filename = Path.GetFileName(entry.SourceFilePath);
         string absolutePath = Path.GetFullPath(entry.SourceFilePath);
-
-        // Create clickable hyperlink using ANSI escape sequences
-        // Format: ESC]8;;file://path ESC\text ESC]8;; ESC\
         string fileUrl = new Uri(absolutePath).AbsoluteUri;
 
-        // Change color for source info
-        Console.ForegroundColor = ConsoleColor.Cyan;
+        Console.ForegroundColor = levelColor;
 
-        // Output as hyperlink: shows filename but links to full path
+        // ANSI hyperlink for clickable source
         Console.Write("\x1b]8;;");
         Console.Write(fileUrl);
         Console.Write("\x1b\\");
         Console.Write($"[{filename}:{entry.SourceLineNumber}]");
         Console.Write("\x1b]8;;\x1b\\");
-        Console.WriteLine();
-      } else
-      {
-        Console.WriteLine();
       }
+
+      Console.WriteLine();
     }
     finally
     {
-      // Restore original color
       Console.ForegroundColor = originalColor;
     }
   }
@@ -240,7 +250,7 @@ public class DefaultGhostLogger : IGhostLogger
         string[] stackTraceLines = exception.StackTrace.Split('\n');
         foreach (var line in stackTraceLines)
         {
-          FormatStackTraceLine(line.Trim());
+          FormatStackTraceLine(line.Trim(), ConsoleColor.Red);
         }
       }
 
@@ -253,7 +263,7 @@ public class DefaultGhostLogger : IGhostLogger
           string[] stackTraceLines = exception.InnerException.StackTrace.Split('\n');
           foreach (var line in stackTraceLines)
           {
-            FormatStackTraceLine(line.Trim());
+            FormatStackTraceLine(line.Trim(), ConsoleColor.White);
           }
         }
       }
@@ -265,16 +275,12 @@ public class DefaultGhostLogger : IGhostLogger
     }
   }
 
-  /// <summary>
-  /// Formats a stack trace line to be IDE-clickable
-  /// </summary>
-  private void FormatStackTraceLine(string line)
+  private void FormatStackTraceLine(string line, ConsoleColor defaultLineColor)
   {
     var originalColor = Console.ForegroundColor;
     try
     {
-      // For VS Code & Rider, use format that makes line numbers clickable
-      // Format: "at Method() in /path/to/file.cs:line"
+      Console.ForegroundColor = defaultLineColor;
       if (line.Contains(" in "))
       {
         string[] parts = line.Split(new[]

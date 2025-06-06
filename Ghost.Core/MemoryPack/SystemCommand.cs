@@ -1,5 +1,5 @@
 using MemoryPack;
-namespace Ghost.Core;
+namespace Ghost;
 
 [MemoryPackable]
 public partial class SystemCommand

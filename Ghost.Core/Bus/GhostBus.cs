@@ -1,12 +1,12 @@
-using Ghost.Core.Data;
+using Ghost.Data;
 using System.Collections.Concurrent;
 using System.Runtime.CompilerServices;
 using System.Text.RegularExpressions;
-using Ghost.Core.Exceptions;
+using Ghost.Exceptions;
 using MemoryPack;
 using System.Threading.Channels;
 
-namespace Ghost.Core.Storage
+namespace Ghost.Storage
 {
     /// <summary>
     /// Message bus implementation for pub/sub communication using ICache as a backing store

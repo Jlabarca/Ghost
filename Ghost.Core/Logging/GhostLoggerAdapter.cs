@@ -1,7 +1,7 @@
-using Ghost.Core.Data;
+using Ghost.Data;
 using Microsoft.Extensions.Logging;
 
-namespace Ghost.Core.Logging;
+namespace Ghost.Logging;
 
 public class GhostLoggerAdapter : ILogger
 {

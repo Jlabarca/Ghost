@@ -1,1190 +1,1452 @@
-using Ghost.Core;
-using Ghost.Core.Storage;
+using Ghost.Storage;
 using MemoryPack;
 using Spectre.Console;
 using Spectre.Console.Cli;
 using System.Collections.Concurrent;
 using System.ComponentModel;
 using System.Diagnostics;
+using System.Text.Json;
 
 namespace Ghost.Father.CLI.Commands;
 
 public class MonitorCommand : AsyncCommand<MonitorCommand.Settings>
 {
-    private readonly IGhostBus _bus;
-    private readonly Table _systemTable;
-    private readonly Table _servicesTable;
-    private readonly Table _oneShotAppsTable;
-    private readonly Dictionary<string, ProcessState> _processes = new();
-    private readonly ConcurrentDictionary<string, ProcessMetrics> _latestMetrics = new();
-    private bool _watching;
-    private string _lastError = string.Empty;
-    private DateTime _lastRefresh = DateTime.MinValue;
-    private CancellationTokenSource _monitoringCts = new();
+  private readonly IGhostBus _bus;
+  private readonly Dictionary<string, GhostProcessInfo> _processes = new();
+  private readonly List<GhostProcessInfo> _processHistory = new();
+  private readonly ConcurrentDictionary<string, ProcessMetrics> _latestMetrics = new();
+  private readonly List<LogEntry> _logs = new();
+  private readonly object _lockObject = new();
 
-    public class Settings : CommandSettings
+  private bool _monitoring = true;
+  private DateTime _lastUpdate = DateTime.UtcNow;
+  private int _totalProcesses = 0;
+  private int _onlineProcesses = 0;
+  private bool _daemonAlive = false;
+  private string _selectedProcessId = null;
+  private bool _isInitializing = true;
+  private Timer _pollTimer;
+
+  public class Settings : CommandSettings
+  {
+    [CommandOption("--refresh")]
+    [Description("Refresh interval in milliseconds")]
+    [DefaultValue(500)]
+    public int RefreshInterval { get; set; }
+
+    [CommandOption("--lines")]
+    [Description("Number of log lines to show")]
+    [DefaultValue(12)]
+    public int LogLines { get; set; }
+
+    [CommandOption("--history")]
+    [Description("Number of historical processes to show")]
+    [DefaultValue(5)]
+    public int HistoryCount { get; set; }
+  }
+
+  public MonitorCommand(IGhostBus bus)
+  {
+    _bus = bus;
+    G.LogInfo($"DAEMON CONFIRMATION - Bus Type is: {_bus.GetType().FullName}");
+  }
+
+
+  public override async Task<int> ExecuteAsync(CommandContext context, Settings settings)
+  {
+    try
     {
-        [CommandOption("--refresh")]
-        [Description("Refresh interval in seconds")]
-        [DefaultValue(3)]
-        public int RefreshInterval { get; set; }
+      // Clear screen and hide cursor
+      //Console.Clear();
+      //AnsiConsole.Clear();
+      //AnsiConsole.Cursor.Hide();
 
-        [CommandOption("--no-clear")]
-        [Description("Don't clear the screen between updates")]
-        public bool NoClear { get; set; }
+      // Initialize data BEFORE starting the live display
+      await InitializeDataWithStatusAsync();
 
-        [CommandOption("--process")]
-        [Description("Monitor specific process")]
-        public string? ProcessId { get; set; }
+      // Create initial dashboard
+      var dashboard = CreateDashboard(settings);
 
-        [CommandOption("--auto-start")]
-        [Description("Automatically start the daemon if not running")]
-        public bool AutoStart { get; set; }
-    }
+      // Start background tasks and monitoring
+      var cts = new CancellationTokenSource();
+      Console.CancelKeyPress += (_, e) =>
+      {
+        e.Cancel = true;
+        _monitoring = false;
+        cts.Cancel();
+      };
 
-    public MonitorCommand(IGhostBus bus)
-    {
-        _bus = bus ?? throw new ArgumentNullException(nameof(bus));
-
-        // System status table
-        _systemTable = new Table()
-            .Border(TableBorder.Rounded)
-            .Title("[blue]System Status[/]")
-            .AddColumn(new TableColumn("[grey]Component[/]").Width(15))
-            .AddColumn(new TableColumn("[grey]Status[/]").Width(15))
-            .AddColumn(new TableColumn("[grey]Info[/]"));
-
-        // Services table
-        _servicesTable = new Table()
-            .Border(TableBorder.Rounded)
-            .Title("[blue]Services[/]")
-            .AddColumn(new TableColumn("[grey]Service[/]").Width(20))
-            .AddColumn(new TableColumn("[grey]Status[/]").Width(12))
-            .AddColumn(new TableColumn("[grey]Started[/]").Width(12))
-            .AddColumn(new TableColumn("[grey]Uptime[/]").Width(12))
-            .AddColumn(new TableColumn("[grey]Resource Usage[/]").Width(25))
-            .AddColumn(new TableColumn("[grey]Actions[/]").Width(15));
-
-        // One-shot apps table
-        _oneShotAppsTable = new Table()
-            .Border(TableBorder.Rounded)
-            .Title("[blue]One-Shot Applications[/]")
-            .AddColumn(new TableColumn("[grey]App[/]").Width(20))
-            .AddColumn(new TableColumn("[grey]Status[/]").Width(12))
-            .AddColumn(new TableColumn("[grey]Started[/]").Width(12))
-            .AddColumn(new TableColumn("[grey]Completed[/]").Width(12))
-            .AddColumn(new TableColumn("[grey]Resource Usage[/]").Width(25));
-    }
-
-    public override async Task<int> ExecuteAsync(CommandContext context, Settings settings)
-    {
-        try
-        {
-            _watching = true;
-            if (!settings.NoClear) AnsiConsole.Clear();
-
-            // Check connection to the daemon
-            if (!await ConnectToDaemonAsync())
+      // Use Live Display for real-time updates
+      await AnsiConsole.Live(dashboard)
+          .AutoClear(true) // Enable auto-clear to prevent overlapping
+          .Overflow(VerticalOverflow.Ellipsis)
+          .StartAsync(async ctx =>
+          {
+            // Start polling timer - check daemon every 10 seconds
+            _pollTimer = new Timer(_ =>
             {
-                if (settings.AutoStart)
+              try
+              {
+                _ = Task.Run(async () =>
                 {
-                    AnsiConsole.MarkupLine("[yellow]GhostFather daemon not running. Attempting to start it...[/]");
-                    if (!await StartDaemonAsync())
-                    {
-                        AnsiConsole.MarkupLine("[red]Error:[/] Failed to start GhostFather daemon.");
-                        return 1;
-                    }
-                }
-                else
-                {
-                    AnsiConsole.MarkupLine("[red]Error:[/] Cannot connect to GhostFather daemon.");
-                    return 1;
-                }
-            }
-
-            // Create layout
-            var layout = new Layout("Root")
-                .SplitRows(
-                    new Layout("System", _systemTable),
-                    new Layout("Services", _servicesTable).Size(10),
-                    new Layout("OneShot", _oneShotAppsTable).Size(10));
-
-            // Add help text
-            AnsiConsole.MarkupLine("[grey]Press [blue]R[/] to refresh, [blue]S[/] to stop a process, [blue]A[/] to start a process, [blue]Q[/] to quit[/]");
-
-            // Start live display
-            await AnsiConsole.Live(layout)
-                .AutoClear(false)
-                .Overflow(VerticalOverflow.Ellipsis)
-                .Cropping(VerticalOverflowCropping.Bottom)
-                .StartAsync(async ctx =>
-                {
-                    // Start all monitoring tasks
-                    var tasks = new List<Task>();
-
-                    // First, fetch initial processes to populate the UI
-                    await FetchInitialProcessList(ctx);
-
-                    // Reset cancellation token for monitoring
-                    _monitoringCts = new CancellationTokenSource();
-
-                    // Start monitoring tasks
-                    tasks.Add(MonitorSystemStatusAsync(ctx, settings));
-                    tasks.Add(MonitorProcessMetricsAsync(ctx, settings));
-                    tasks.Add(MonitorStateUpdatesAsync(ctx, settings));
-                    tasks.Add(HandleUserInputAsync(ctx));
-
-                    // Wait for either all tasks to complete or user to quit
-                    await Task.WhenAny(tasks);
-
-                    // Cancel other tasks
-                    _monitoringCts.Cancel();
+                  await PollProcessesAsync();
                 });
+              }
+              catch (Exception ex)
+              {
+                AddLog("monitor", "error", $"Polling error: {ex.Message}");
+              }
+            }, null, TimeSpan.Zero, TimeSpan.FromSeconds(10));
 
-            return 0;
-        }
-        catch (Exception ex)
-        {
-            AnsiConsole.MarkupLine($"[red]Error:[/] {ex.Message}");
-            return 1;
-        }
-        finally
-        {
-            _watching = false;
-            _monitoringCts.Cancel();
-            _monitoringCts.Dispose();
-        }
-    }
-
-    private async Task<bool> StartDaemonAsync()
-    {
-        try
-        {
-            AnsiConsole.MarkupLine("[grey]Attempting to start GhostFather daemon...[/]");
-
-            // This is a simplified approach - in a real implementation, you'd need a proper
-            // way to find and start the GhostFather daemon process
-            var processInfo = new ProcessStartInfo
+            // Start background tasks for monitoring
+            var tasks = new List<Task>
             {
-                FileName = "ghost-father-daemon",
-                UseShellExecute = true,
-                CreateNoWindow = false
+                MonitorProcessesAsync(cts.Token),
+                MonitorMetricsAsync(cts.Token),
+                MonitorLogsAsync(cts.Token)
             };
 
-            Process.Start(processInfo);
+            // Start background task processing
+            _ = Task.WhenAll(tasks);
 
-            // Wait for daemon to start
-            for (int i = 0; i < 10; i++)
+            // Mark initialization as complete
+            _isInitializing = false;
+
+            // Main update loop
+            while (_monitoring && !cts.Token.IsCancellationRequested)
             {
-                await Task.Delay(1000);
-                if (await ConnectToDaemonAsync())
-                {
-                    AnsiConsole.MarkupLine("[green]GhostFather daemon started successfully.[/]");
-                    return true;
-                }
-            }
+              try
+              {
+                // Update the dashboard
+                var updatedDashboard = CreateDashboard(settings);
+                ctx.UpdateTarget(updatedDashboard);
 
-            return false;
-        }
-        catch (Exception ex)
-        {
-            AnsiConsole.MarkupLine($"[red]Error starting daemon:[/] {ex.Message}");
-            return false;
-        }
-    }
-
-    private async Task<bool> ConnectToDaemonAsync()
-    {
-        try
-        {
-            // Send a ping command to check if daemon is running
-            var pingCommand = new SystemCommand
-            {
-                CommandId = Guid.NewGuid().ToString(),
-                CommandType = "ping",
-                Parameters = new Dictionary<string, string>
-                {
-                    ["responseChannel"] = $"ghost:responses:{Guid.NewGuid()}"
-                }
-            };
-
-            var responseChannel = pingCommand.Parameters["responseChannel"];
-            await _bus.PublishAsync("ghost:commands", pingCommand);
-
-            // Wait for response with timeout
-            var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
-
-            try
-            {
-                await foreach (var response in _bus.SubscribeAsync<CommandResponse>(responseChannel, cts.Token))
-                {
-                    if (response.CommandId == pingCommand.CommandId && response.Success)
-                    {
-                        return true;
-                    }
-                }
-            }
-            catch (OperationCanceledException)
-            {
-                // Timeout occurred
-                return false;
-            }
-
-            return false;
-        }
-        catch (Exception ex)
-        {
-            _lastError = ex.Message;
-            return false;
-        }
-    }
-
-    private async Task MonitorSystemStatusAsync(LiveDisplayContext ctx, Settings settings)
-    {
-        while (_watching && !_monitoringCts.IsCancellationRequested)
-        {
-            try
-            {
-                UpdateSystemTable();
-                ctx.Refresh();
-                await Task.Delay(settings.RefreshInterval * 1000, _monitoringCts.Token);
-            }
-            catch (TaskCanceledException)
-            {
-                // Normal cancellation
+                await Task.Delay(settings.RefreshInterval, cts.Token);
+              }
+              catch (OperationCanceledException)
+              {
                 break;
+              }
+              catch (Exception ex)
+              {
+                // Add error to logs but continue
+                AddLog("monitor", "error", $"Display error: {ex.Message}");
+                await Task.Delay(1000, cts.Token);
+              }
             }
-            catch (Exception ex)
-            {
-                _lastError = $"Error updating system status: {ex.Message}";
-                await Task.Delay(1000, _monitoringCts.Token); // Shorter delay on error
-            }
-        }
-    }
+          });
 
-    private async Task MonitorStateUpdatesAsync(LiveDisplayContext ctx, Settings settings)
+      return 0;
+    }
+    catch (Exception ex)
     {
-        while (_watching && !_monitoringCts.IsCancellationRequested)
+      AnsiConsole.WriteException(ex);
+      return 1;
+    }
+    finally
+    {
+      _pollTimer?.Dispose();
+      //AnsiConsole.Cursor.Show();
+      //Console.Clear();
+    }
+  }
+
+  // Separate initialization method that uses Status display BEFORE Live display
+  private async Task InitializeDataWithStatusAsync()
+  {
+    await AnsiConsole.Status()
+        .Spinner(Spinner.Known.Dots)
+        .SpinnerStyle(Style.Parse("green"))
+        .StartAsync("Initializing connection to Ghost daemon...", async ctx =>
         {
-            try
-            {
-                // Only refresh if we haven't refreshed recently
-                if ((DateTime.UtcNow - _lastRefresh).TotalSeconds >= settings.RefreshInterval)
-                {
-                    await FetchProcessStatusUpdates(ctx);
-                    _lastRefresh = DateTime.UtcNow;
-                }
+          ctx.Status("Checking daemon connection...");
+          await Task.Delay(500); // Give user time to see the status
 
-                UpdateProcessTables();
-                ctx.Refresh();
+          try
+          {
+            // First try to ping the daemon
+            await CheckDaemonConnectionAsync();
 
-                await Task.Delay(settings.RefreshInterval * 1000, _monitoringCts.Token);
-            }
-            catch (TaskCanceledException)
+            if (_daemonAlive)
             {
-                // Normal cancellation
-                break;
-            }
-            catch (Exception ex)
-            {
-                _lastError = $"Error monitoring state updates: {ex.Message}";
-                await Task.Delay(1000, _monitoringCts.Token); // Shorter delay on error
-            }
-        }
-    }
+              ctx.Status("Daemon connected. Discovering processes...");
+              await Task.Delay(500);
 
-    private void UpdateSystemTable()
+              // Send discover commands
+              await SendDiscoveryCommandsAsync();
+
+              ctx.Status("Setting up monitoring...");
+              await Task.Delay(300);
+
+              AddLog("monitor", "info", "Monitor initialized successfully");
+            } else
+            {
+              ctx.Status("Daemon offline. Monitoring in standalone mode...");
+              await Task.Delay(1000);
+
+              AddLog("monitor", "warn", "Daemon not responding - running in standalone mode");
+            }
+          }
+          catch (Exception ex)
+          {
+            ctx.Status($"Initialization error: {ex.Message}");
+            await Task.Delay(1500);
+
+            AddLog("monitor", "error", $"Initialization failed: {ex.Message}");
+          }
+        });
+  }
+
+  private async Task CheckDaemonConnectionAsync()
+  {
+    try
     {
-        _systemTable.Rows.Clear();
+      AddLog("monitor", "debug", "Starting daemon connection check...");
 
-        // System metrics
-        var process = Process.GetCurrentProcess();
-        _systemTable.AddRow(
-            "CPU",
-            $"{process.TotalProcessorTime.TotalSeconds:F1}s",
-            $"Threads: {process.Threads.Count}"
-        );
+      var pingCommand = new SystemCommand
+      {
+          CommandId = Guid.NewGuid().ToString(),
+          CommandType = "ping",
+          Parameters = new Dictionary<string, string>
+          {
+              ["responseChannel"] = $"ghost:responses:{Guid.NewGuid()}"
+          }
+      };
 
-        _systemTable.AddRow(
-            "Memory",
-            FormatBytes(process.WorkingSet64),
-            $"Private: {FormatBytes(process.PrivateMemorySize64)}"
-        );
+      var responseChannel = pingCommand.Parameters["responseChannel"];
+      AddLog("monitor", "debug", $"Created ping command {pingCommand.CommandId}, response channel: {responseChannel}");
 
-        // GC metrics
-        _systemTable.AddRow(
-            "GC",
-            $"Gen0: {GC.CollectionCount(0)}",
-            $"Gen1: {GC.CollectionCount(1)}, Gen2: {GC.CollectionCount(2)}"
-        );
-
-        // Process statistics
-        _systemTable.AddRow(
-            "Monitoring",
-            $"{_processes.Count} processes",
-            $"Services: {_processes.Values.Count(p => p.IsService)}, One-shot: {_processes.Values.Count(p => !p.IsService)}"
-        );
-
-        // Daemon status
-        _systemTable.AddRow(
-            "Daemon",
-            _processes.TryGetValue("ghost-daemon", out var daemon) && daemon.IsRunning ?
-                "[green]Connected[/]" : "[yellow]Disconnected[/]",
-            _lastError.Length > 0 ? $"[yellow]{_lastError}[/]" : "Running normally"
-        );
-
-        // Last refresh time
-        _systemTable.AddRow(
-            "Last Update",
-            _lastRefresh == DateTime.MinValue ?
-                "[yellow]Pending[/]" : $"[grey]{FormatTimeAgo(_lastRefresh)}[/]",
-            ""
-        );
-    }
-
-    private async Task FetchInitialProcessList(LiveDisplayContext ctx)
-    {
+      // Create a task to wait for response
+      var responseTask = Task.Run(async () =>
+      {
         try
         {
-            // Query GhostFather for all processes
-            var command = new SystemCommand
+          AddLog("monitor", "debug", $"Subscribing to response channel: {responseChannel}");
+          using var cts = new CancellationTokenSource(5000); // 5 second timeout
+
+          await foreach (var response in _bus.SubscribeAsync<CommandResponse>(responseChannel, cts.Token))
+          {
+            AddLog("monitor", "debug", $"Received response: CommandId={response?.CommandId}, Success={response?.Success}");
+
+            if (response != null && response.CommandId == pingCommand.CommandId && response.Success)
             {
-                CommandId = Guid.NewGuid().ToString(),
-                CommandType = "status",
-                Parameters = new Dictionary<string, string>
-                {
-                    ["responseChannel"] = $"ghost:responses:{Guid.NewGuid()}"
-                }
-            };
-
-            var responseChannel = command.Parameters["responseChannel"];
-            await _bus.PublishAsync("ghost:commands", command);
-
-            AnsiConsole.MarkupLine("[grey]Requesting process list from daemon...[/]");
-
-            // Wait for response with timeout
-            var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
-
-            try
+              AddLog("monitor", "info", "Daemon ping successful!");
+              return true;
+            } else
             {
-                await foreach (var response in _bus.SubscribeAsync<CommandResponse>(responseChannel, cts.Token))
-                {
-                    if (response.CommandId == command.CommandId)
-                    {
-                        if (response.Success && response.Data != null)
-                        {
-                            try
-                            {
-                                // Process the response data using MemoryPack serialization
-                                if (response.Data is ProcessListResponse processListResponse &&
-                                    processListResponse.Processes != null)
-                                {
-                                    // Direct access to process list
-                                    foreach (var process in processListResponse.Processes)
-                                    {
-                                        _processes[process.Id] = new ProcessState
-                                        {
-                                            Id = process.Id,
-                                            Name = process.Name ?? GetDisplayName(process.Id),
-                                            IsService = process.IsService,//DetermineIfService(process.LastMetrics),
-                                            IsRunning = process.Status == ProcessStatus.Running,
-                                            StartTime = process.StartTime,
-                                            EndTime = process.Status != ProcessStatus.Running ? DateTime.UtcNow : null,
-                                            LastSeen = DateTime.UtcNow
-                                        };
-                                    }
-
-                                    AnsiConsole.MarkupLine($"[grey]Received {processListResponse.Processes.Count} processes from daemon[/]");
-                                }
-                                else
-                                {
-                                    // If we didn't get a standard ProcessListResponse, attempt to extract process info
-                                    await ExtractProcessesFromResponseData(response.Data);
-                                }
-
-                                // Update tables
-                                UpdateProcessTables();
-                                ctx.Refresh();
-                                _lastRefresh = DateTime.UtcNow;
-                            }
-                            catch (Exception ex)
-                            {
-                                _lastError = $"Error processing status response: {ex.Message}";
-                                AnsiConsole.MarkupLine($"[yellow]Error processing response: {ex.Message}[/]");
-                            }
-                        }
-                        else if (!response.Success)
-                        {
-                            _lastError = response.Error ?? "Unknown error";
-                            AnsiConsole.MarkupLine($"[yellow]Daemon returned error: {response.Error}[/]");
-                        }
-
-                        break;
-                    }
-                }
+              AddLog("monitor", "warn", $"Received invalid response: CommandId mismatch or failed");
             }
-            catch (OperationCanceledException)
-            {
-                _lastError = "Timeout waiting for process list";
-                AnsiConsole.MarkupLine("[yellow]Timeout waiting for process list from daemon[/]");
-            }
+          }
+
+          AddLog("monitor", "warn", "No valid response received from daemon");
+          return false;
+        }
+        catch (OperationCanceledException)
+        {
+          AddLog("monitor", "warn", "Daemon ping timed out after 5 seconds");
+          return false;
         }
         catch (Exception ex)
         {
-            _lastError = ex.Message;
-            AnsiConsole.MarkupLine($"[red]Error fetching initial process list: {ex.Message}[/]");
+          AddLog("monitor", "error", $"Error waiting for daemon response: {ex.Message}");
+          return false;
         }
+      });
+
+      // Send the ping command
+      AddLog("monitor", "debug", "Publishing ping command to ghost:commands channel...");
+      await _bus.PublishAsync("ghost:commands", pingCommand);
+      AddLog("monitor", "debug", "Ping command published, waiting for response...");
+
+      // Wait for response with timeout
+      _daemonAlive = await responseTask;
+
+      AddLog("monitor", "info", $"Daemon connection check completed: {(_daemonAlive ? "ALIVE" : "DEAD")}");
+    }
+    catch (Exception ex)
+    {
+      AddLog("monitor", "error", $"Exception during daemon connection check: {ex.Message}");
+      _daemonAlive = false;
+    }
+  }
+
+  private async Task SendDiscoveryCommandsAsync()
+  {
+    try
+    {
+      // Send discover command
+      var discoverCommand = new SystemCommand
+      {
+          CommandId = Guid.NewGuid().ToString(),
+          CommandType = "discover",
+          Parameters = new Dictionary<string, string>()
+      };
+
+      await _bus.PublishAsync("ghost:commands", discoverCommand);
+      await Task.Delay(500);
+
+      // Send list command for backward compatibility
+      var listCommand = new SystemCommand
+      {
+          CommandId = Guid.NewGuid().ToString(),
+          CommandType = "list",
+          Parameters = new Dictionary<string, string>()
+      };
+
+      await _bus.PublishAsync("ghost:commands", listCommand);
+      await Task.Delay(300);
+
+      // Publish a query event for discovery
+      await _bus.PublishAsync("ghost:events", new
+      {
+          Id = "monitor-query",
+          EventType = "query_processes",
+          Timestamp = DateTime.UtcNow
+      });
+    }
+    catch (Exception ex)
+    {
+      AddLog("monitor", "warn", $"Discovery command failed: {ex.Message}");
+    }
+  }
+
+  private Layout CreateDashboard(Settings settings)
+  {
+    var layout = new Layout("Root")
+        .SplitRows(
+            new Layout("Header").Size(3),
+            new Layout("Content").SplitColumns(
+                new Layout("MainPanel").SplitRows(
+                    new Layout("ProcessPanel").Ratio(2),
+                    new Layout("HistoryPanel").Ratio(1)
+                ).Ratio(3),
+                new Layout("SidePanel").SplitRows(
+                    new Layout("DetailPanel").Ratio(1),
+                    new Layout("LogPanel").Ratio(2)
+                ).Ratio(2)
+            ),
+            new Layout("Footer").SplitColumns(
+                new Layout("Metrics").Ratio(1),
+                new Layout("Controls").Ratio(1)
+            ).Size(8)
+        );
+
+    layout["Header"].Update(RenderHeader());
+    layout["ProcessPanel"].Update(RenderActiveProcessTable(settings));
+    layout["HistoryPanel"].Update(RenderHistoryTable(settings));
+    layout["DetailPanel"].Update(RenderProcessDetails());
+    layout["LogPanel"].Update(RenderLogs(settings));
+    layout["Metrics"].Update(RenderMetrics());
+    layout["Controls"].Update(RenderControls());
+
+    return layout;
+  }
+
+  private Panel RenderHeader()
+  {
+    var uptime = DateTime.UtcNow - Process.GetCurrentProcess().StartTime;
+
+    // Show initialization status
+    if (_isInitializing)
+    {
+      var content1 = new Markup("[yellow]Initializing Ghost Monitor...[/]").Centered();
+      return new Panel(content1)
+          .Border(BoxBorder.Rounded)
+          .BorderColor(Color.Yellow)
+          .Header("[bold]Ghost Process Manager[/]");
     }
 
-    private async Task FetchProcessStatusUpdates(LiveDisplayContext ctx)
+    // Different status indicators based on daemon and process status
+    string statusText, statusColor;
+    if (_daemonAlive)
     {
+      if (_onlineProcesses > 0)
+      {
+        statusText = "Online";
+        statusColor = "green";
+      } else
+      {
+        statusText = "Idle";
+        statusColor = "yellow";
+      }
+    } else
+    {
+      statusText = "Offline";
+      statusColor = "red";
+    }
+
+    var daemonStatus = _daemonAlive ? "[green]Running[/]" : "[red]Offline[/]";
+
+    var content = new Grid()
+        .AddColumn(new GridColumn().NoWrap())
+        .AddColumn(new GridColumn().NoWrap())
+        .AddColumn(new GridColumn().NoWrap())
+        .AddRow(
+            $"[bold blue]Ghost Father Monitor[/]",
+            $"Status: [{statusColor}]{statusText}[/]",
+            $"Uptime: [yellow]{FormatDuration(uptime)}[/]"
+        )
+        .AddRow(
+            $"Total: [blue]{_totalProcesses}[/]",
+            $"Active: [green]{_onlineProcesses}[/] (Daemon: {daemonStatus})",
+            $"Updated: [grey]{_lastUpdate:HH:mm:ss}[/]"
+        );
+
+    return new Panel(content)
+        .Border(BoxBorder.Rounded)
+        .BorderColor(Color.Blue)
+        .Header("[bold]Ghost Process Manager[/]")
+        .HeaderAlignment(Justify.Center);
+  }
+
+  private Table RenderActiveProcessTable(Settings settings)
+  {
+    var table = new Table()
+        .BorderColor(Color.Green)
+        .Title("[bold]Active Processes[/]")
+        .Expand();
+
+    // Add columns with better formatting
+    table.AddColumn(new TableColumn("[bold]ID[/]").Centered().Width(10));
+    table.AddColumn(new TableColumn("[bold]Name[/]").LeftAligned());
+    table.AddColumn(new TableColumn("[bold]Type[/]").Centered().Width(8));
+    table.AddColumn(new TableColumn("[bold]Status[/]").Centered().Width(10));
+    table.AddColumn(new TableColumn("[bold]CPU[/]").RightAligned().Width(7));
+    table.AddColumn(new TableColumn("[bold]Memory[/]").RightAligned().Width(10));
+    table.AddColumn(new TableColumn("[bold]Uptime[/]").RightAligned().Width(10));
+
+    lock (_lockObject)
+    {
+      // Show active processes
+      var activeProcesses = _processes.Values
+          .Where(p => p.Status?.ToLowerInvariant() != "stopped")
+          .OrderBy(p => p.Id)
+          .ToList();
+
+      foreach (var process in activeProcesses)
+      {
+        var statusColor = process.Status?.ToLowerInvariant() switch
+        {
+            "online" => "green",
+            "stopped" => "red",
+            "errored" => "red",
+            "stopping" => "yellow",
+            "launching" => "yellow",
+            _ => "grey"
+        };
+
+        var processType = process.Mode?.ToLowerInvariant() switch
+        {
+            "service" => "[blue]service[/]",
+            "app" => "[cyan]app[/]",
+            "daemon" => "[magenta]daemon[/]",
+            _ => process.Mode ?? "app"
+        };
+
+        var cpuText = process.CpuUsage.HasValue ? $"{process.CpuUsage:F1}%" : "-";
+        var memoryText = process.MemoryUsage.HasValue ? FormatBytes(process.MemoryUsage.Value) : "-";
+        var uptimeText = process.StartTime.HasValue
+            ? FormatDuration(DateTime.UtcNow - process.StartTime.Value)
+            : "-";
+
+        // Highlight selected process
+        string idText = GetShortId(process.Id);
+        string nameText = process.Name ?? "";
+
+        if (process.Id == _selectedProcessId)
+        {
+          idText = $"[black on white]{idText}[/]";
+          nameText = $"[black on white]{nameText}[/]";
+        }
+
+        table.AddRow(
+            idText,
+            nameText,
+            processType,
+            $"[{statusColor}]{process.Status}[/]",
+            cpuText,
+            memoryText,
+            uptimeText
+        );
+      }
+
+      if (!activeProcesses.Any())
+      {
+        table.AddRow(
+            "[grey]No active processes found[/]",
+            "", "", "", "", "", ""
+        );
+      }
+    }
+
+    return table;
+  }
+
+  private Table RenderHistoryTable(Settings settings)
+  {
+    var table = new Table()
+        .BorderColor(Color.Blue)
+        .Title("[bold]Process History[/]")
+        .Expand();
+
+    // Add columns
+    table.AddColumn(new TableColumn("[bold]ID[/]").Centered().Width(10));
+    table.AddColumn(new TableColumn("[bold]Name[/]").LeftAligned());
+    table.AddColumn(new TableColumn("[bold]Type[/]").Centered().Width(8));
+    table.AddColumn(new TableColumn("[bold]Status[/]").Centered().Width(10));
+    table.AddColumn(new TableColumn("[bold]Started[/]").Centered().Width(12));
+    table.AddColumn(new TableColumn("[bold]Ended[/]").Centered().Width(12));
+    table.AddColumn(new TableColumn("[bold]Duration[/]").RightAligned().Width(10));
+
+    lock (_lockObject)
+    {
+      // Get history processes plus stopped active processes
+      var historyProcesses = _processHistory
+          .Concat(_processes.Values.Where(p => p.Status?.ToLowerInvariant() == "stopped"))
+          .OrderByDescending(p => p.EndTime ?? DateTime.MinValue)
+          .ThenByDescending(p => p.StartTime ?? DateTime.MinValue)
+          .Take(settings.HistoryCount)
+          .ToList();
+
+      foreach (var process in historyProcesses)
+      {
+        var statusColor = process.Status?.ToLowerInvariant() switch
+        {
+            "stopped" => "blue",
+            "errored" => "red",
+            "crashed" => "red",
+            _ => "grey"
+        };
+
+        var processType = process.Mode?.ToLowerInvariant() switch
+        {
+            "service" => "[blue]service[/]",
+            "app" => "[cyan]app[/]",
+            "daemon" => "[magenta]daemon[/]",
+            _ => process.Mode ?? "app"
+        };
+
+        var startText = process.StartTime?.ToString("HH:mm:ss") ?? "-";
+        var endText = process.EndTime?.ToString("HH:mm:ss") ?? "-";
+        var durationText = (process.StartTime.HasValue && process.EndTime.HasValue)
+            ? FormatDuration(process.EndTime.Value - process.StartTime.Value)
+            : "-";
+
+        // Highlight selected process
+        string idText = GetShortId(process.Id);
+        string nameText = process.Name ?? "";
+
+        if (process.Id == _selectedProcessId)
+        {
+          idText = $"[black on white]{idText}[/]";
+          nameText = $"[black on white]{nameText}[/]";
+        }
+
+        table.AddRow(
+            idText,
+            nameText,
+            processType,
+            $"[{statusColor}]{process.Status}[/]",
+            startText,
+            endText,
+            durationText
+        );
+      }
+
+      if (!historyProcesses.Any())
+      {
+        table.AddRow(
+            "[grey]No process history available[/]",
+            "", "", "", "", "", ""
+        );
+      }
+    }
+
+    return table;
+  }
+
+  private Panel RenderProcessDetails()
+  {
+    Panel panel;
+
+    lock (_lockObject)
+    {
+      GhostProcessInfo selectedProcess = null;
+
+      // Find the selected process
+      if (!string.IsNullOrEmpty(_selectedProcessId))
+      {
+        selectedProcess = _processes.TryGetValue(_selectedProcessId, out var process)
+            ? process
+            : _processHistory.FirstOrDefault(p => p.Id == _selectedProcessId);
+      }
+
+      if (selectedProcess != null)
+      {
+        var grid = new Grid()
+            .AddColumn(new GridColumn().NoWrap().PadRight(1))
+            .AddColumn(new GridColumn().PadLeft(1));
+
+        grid.AddRow("[bold]Process ID:[/]", selectedProcess.Id);
+        grid.AddRow("[bold]Name:[/]", selectedProcess.Name ?? "-");
+        grid.AddRow("[bold]Type:[/]", selectedProcess.Mode ?? "app");
+
+        var statusColor = selectedProcess.Status?.ToLowerInvariant() switch
+        {
+            "online" => "green",
+            "stopped" => "blue",
+            "errored" => "red",
+            _ => "grey"
+        };
+
+        grid.AddRow("[bold]Status:[/]", $"[{statusColor}]{selectedProcess.Status}[/]");
+
+        if (selectedProcess.StartTime.HasValue)
+        {
+          grid.AddRow("[bold]Started:[/]", selectedProcess.StartTime.Value.ToString("yyyy-MM-dd HH:mm:ss"));
+        }
+
+        if (selectedProcess.EndTime.HasValue)
+        {
+          grid.AddRow("[bold]Ended:[/]", selectedProcess.EndTime.Value.ToString("yyyy-MM-dd HH:mm:ss"));
+
+          if (selectedProcess.StartTime.HasValue)
+          {
+            var duration = selectedProcess.EndTime.Value - selectedProcess.StartTime.Value;
+            grid.AddRow("[bold]Runtime:[/]", FormatDuration(duration));
+          }
+        } else if (selectedProcess.StartTime.HasValue)
+        {
+          var uptime = DateTime.UtcNow - selectedProcess.StartTime.Value;
+          grid.AddRow("[bold]Uptime:[/]", FormatDuration(uptime));
+        }
+
+        grid.AddRow("[bold]Restarts:[/]", selectedProcess.Restarts?.ToString() ?? "0");
+
+        if (selectedProcess.CpuUsage.HasValue)
+        {
+          grid.AddRow("[bold]CPU Usage:[/]", $"{selectedProcess.CpuUsage:F2}%");
+        }
+
+        if (selectedProcess.MemoryUsage.HasValue)
+        {
+          grid.AddRow("[bold]Memory:[/]", FormatBytes(selectedProcess.MemoryUsage.Value));
+        }
+
+        panel = new Panel(grid)
+            .Header($"[bold]Process Details: {selectedProcess.Name}[/]")
+            .Border(BoxBorder.Rounded)
+            .BorderColor(Color.Yellow)
+            .Expand();
+      } else
+      {
+        panel = new Panel(new Markup("[grey]No process selected[/]").Centered())
+            .Header("[bold]Process Details[/]")
+            .Border(BoxBorder.Rounded)
+            .BorderColor(Color.Yellow)
+            .Expand();
+      }
+    }
+
+    return panel;
+  }
+
+  private Panel RenderLogs(Settings settings)
+  {
+    var logTable = new Table()
+        .Border(TableBorder.None)
+        .Expand()
+        .HideHeaders();
+
+    logTable.AddColumn(new TableColumn("[grey]Time[/]").Width(8));
+    logTable.AddColumn(new TableColumn("[grey]Source[/]").Width(8));
+    logTable.AddColumn(new TableColumn("[grey]Level[/]").Width(5));
+    logTable.AddColumn(new TableColumn("[grey]Message[/]").NoWrap());
+
+    lock (_lockObject)
+    {
+      var filteredLogs = _logs
+          .Where(log => !log.Message?.Contains("Spectre.Console") ?? true)
+          .TakeLast(settings.LogLines)
+          .ToList();
+
+      foreach (var log in filteredLogs)
+      {
+        var timeStr = log.Timestamp.ToString("HH:mm:ss");
+        var sourceName = GetShortName(log.Source);
+
+        var levelColor = log.Level?.ToLowerInvariant() switch
+        {
+            "error" => "red",
+            "warn" or "warning" => "yellow",
+            "info" => "green",
+            "debug" => "grey",
+            _ => "white"
+        };
+
+        var levelText = log.Level?.ToUpper();
+        if (!string.IsNullOrEmpty(levelText) && levelText.Length > 4)
+        {
+          levelText = levelText.Substring(0, 4);
+        }
+        levelText = levelText ?? "INFO";
+
+        logTable.AddRow(
+            $"[grey]{timeStr}[/]",
+            $"[blue]{sourceName}[/]",
+            $"[{levelColor}]{levelText}[/]",
+            log.Message ?? ""
+        );
+      }
+
+      if (!filteredLogs.Any())
+      {
+        logTable.AddRow(
+            "[grey]--:--:--[/]",
+            "[grey]---[/]",
+            "[grey]---[/]",
+            "[grey]No logs available yet[/]"
+        );
+      }
+    }
+
+    return new Panel(logTable)
+        .Border(BoxBorder.Rounded)
+        .BorderColor(Color.Magenta1)
+        .Header("[bold]Application Logs[/]")
+        .Expand();
+  }
+
+  private Panel RenderMetrics()
+  {
+    var currentProcess = Process.GetCurrentProcess();
+
+    var metrics = new Grid()
+        .AddColumn(new GridColumn().NoWrap().PadRight(4))
+        .AddColumn()
+        .AddRow("[bold]System Metrics[/]", "")
+        .AddRow("[cyan]CPU Cores:[/]", Environment.ProcessorCount.ToString())
+        .AddRow("[cyan]Memory Usage:[/]", FormatBytes(currentProcess.WorkingSet64))
+        .AddRow("[cyan]Threads:[/]", currentProcess.Threads.Count.ToString())
+        .AddRow("[bold]GC Info[/]", "")
+        .AddRow("[green]Gen 0:[/]", GC.CollectionCount(0).ToString("N0"))
+        .AddRow("[green]Gen 1:[/]", GC.CollectionCount(1).ToString("N0"))
+        .AddRow("[green]Gen 2:[/]", GC.CollectionCount(2).ToString("N0"));
+
+    return new Panel(metrics)
+        .Border(BoxBorder.Rounded)
+        .BorderColor(Color.Green)
+        .Header("[bold]System Metrics[/]")
+        .Expand();
+  }
+
+  private Panel RenderControls()
+  {
+    var controls = new Grid()
+        .AddColumn(new GridColumn().NoWrap().PadRight(4))
+        .AddColumn()
+        .AddRow("[bold]Controls[/]", "")
+        .AddRow("[blue]Ctrl+C[/]", "Exit Monitor")
+        .AddRow("[blue]↑/↓[/]", "Navigate Processes")
+        .AddRow("[blue]Enter[/]", "Select Process")
+        .AddRow("[bold]Commands[/]", "")
+        .AddRow("[green]start[/]", "Start Process")
+        .AddRow("[red]stop[/]", "Stop Process")
+        .AddRow("[yellow]restart[/]", "Restart Process");
+
+    return new Panel(controls)
+        .Border(BoxBorder.Rounded)
+        .BorderColor(Color.Cyan1)
+        .Header("[bold]Key Bindings[/]")
+        .Expand();
+  }
+
+  // Rest of the methods remain the same as before, but I'll include the critical ones:
+
+  private async Task<T> WaitForResponseAsync<T>(string channel, CancellationToken ct)
+  {
+    try
+    {
+      await foreach (var response in _bus.SubscribeAsync<T>(channel, ct))
+      {
+        return response;
+      }
+    }
+    catch (OperationCanceledException)
+    {
+      // Timeout is expected
+    }
+    return default;
+  }
+
+  private async Task MonitorProcessesAsync(CancellationToken cancellationToken)
+  {
+    try
+    {
+      AddLog("monitor", "debug", "Starting to monitor ghost:events:* channel...");
+
+      await foreach (var message in _bus.SubscribeAsync<object>("ghost:events:*", cancellationToken))
+      {
+        if (!_monitoring) break;
+
         try
         {
-            // Query GhostFather for all processes
-            var command = new SystemCommand
-            {
-                CommandId = Guid.NewGuid().ToString(),
-                CommandType = "status",
-                Parameters = new Dictionary<string, string>
-                {
-                    ["responseChannel"] = $"ghost:responses:{Guid.NewGuid()}"
-                }
-            };
-
-            var responseChannel = command.Parameters["responseChannel"];
-            await _bus.PublishAsync("ghost:commands", command);
-
-            // Wait for response with timeout
-            var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
-
-            try
-            {
-                await foreach (var response in _bus.SubscribeAsync<CommandResponse>(responseChannel, cts.Token))
-                {
-                    if (response.CommandId == command.CommandId)
-                    {
-                        if (response.Success && response.Data != null)
-                        {
-                            await ExtractProcessesFromResponseData(response.Data);
-                        }
-                        break;
-                    }
-                }
-            }
-            catch (OperationCanceledException)
-            {
-                // Timeout - we'll try again next cycle
-            }
+          AddLog("monitor", "debug", $"Received event message: {message?.GetType().Name}");
+          await ProcessEventMessage(message);
+          _lastUpdate = DateTime.UtcNow;
         }
         catch (Exception ex)
         {
-            _lastError = $"Status update error: {ex.Message}";
+          AddLog("monitor", "warn", $"Failed to process event: {ex.Message}");
         }
+      }
     }
-
-    private async Task ExtractProcessesFromResponseData(object responseData)
+    catch (OperationCanceledException)
     {
+      AddLog("monitor", "debug", "Process monitoring cancelled");
+    }
+    catch (Exception ex)
+    {
+      AddLog("monitor", "error", $"Process monitor error: {ex.Message}");
+    }
+  }
+
+  private async Task MonitorMetricsAsync(CancellationToken cancellationToken)
+  {
+    try
+    {
+      AddLog("monitor", "debug", "Starting to monitor ghost:metrics:* channel...");
+
+      await foreach (var metricsData in _bus.SubscribeAsync<object>("ghost:metrics:*", cancellationToken))
+      {
+        if (!_monitoring) break;
+
         try
         {
-            // Try to extract process list using different methods
-            if (responseData is ProcessListResponse processListResponse &&
-                processListResponse.Processes != null)
+          var topic = _bus.GetLastTopic();
+          var processId = ExtractProcessIdFromTopic(topic);
+
+          AddLog("monitor", "debug", $"Received metrics for process: {processId}");
+
+          if (!string.IsNullOrEmpty(processId))
+          {
+            var metrics = await ExtractMetricsAsync(metricsData, processId);
+            if (metrics != null)
             {
-                // Direct ProcessListResponse
-                foreach (var process in processListResponse.Processes)
-                {
-                    UpdateProcessState(process);
-                }
-                return;
+              _latestMetrics[processId] = metrics;
+              UpdateProcessWithMetrics(processId, metrics);
+              _lastUpdate = DateTime.UtcNow;
             }
-
-            // Attempt to serialize the response data to bytes and then deserialize as different types
-            byte[] serialized = MemoryPackSerializer.Serialize(responseData);
-
-            try
-            {
-                // Try to deserialize as a dictionary
-                var dataDict = MemoryPackSerializer.Deserialize<Dictionary<string, object>>(serialized);
-
-                if (dataDict != null && dataDict.TryGetValue("Processes", out var processesObj))
-                {
-                    byte[] processesSerialized = MemoryPackSerializer.Serialize(processesObj);
-                    var processList = MemoryPackSerializer.Deserialize<List<ProcessState>>(processesSerialized);
-
-                    if (processList != null)
-                    {
-                        foreach (var process in processList)
-                        {
-                            _processes[process.Id] = process;
-                        }
-                        return;
-                    }
-
-                    // Alternative: try as dictionary array
-                    var processesDict = MemoryPackSerializer.Deserialize<List<Dictionary<string, object>>>(processesSerialized);
-                    if (processesDict != null)
-                    {
-                        foreach (var processDict in processesDict)
-                        {
-                            if (processDict.TryGetValue("id", out var idObj) && idObj != null)
-                            {
-                                var id = idObj.ToString();
-
-                                // Get or create process state
-                                if (!_processes.TryGetValue(id, out var process))
-                                {
-                                    process = new ProcessState
-                                    {
-                                        Id = id,
-                                        Name = processDict.TryGetValue("name", out var nameObj) && nameObj != null ?
-                                            nameObj.ToString() : GetDisplayName(id)
-                                    };
-                                    _processes[id] = process;
-                                }
-
-                                // Update status
-                                if (processDict.TryGetValue("status", out var statusObj) && statusObj != null)
-                                {
-                                    var statusStr = statusObj.ToString();
-                                    process.IsRunning = statusStr.Equals("Running", StringComparison.OrdinalIgnoreCase);
-                                }
-
-                                // Update timestamps
-                                if (processDict.TryGetValue("StartTime", out var startTimeObj) && startTimeObj != null &&
-                                    DateTime.TryParse(startTimeObj.ToString(), out var startTime))
-                                {
-                                    process.StartTime = startTime;
-                                }
-
-                                if (!process.IsRunning && processDict.TryGetValue("LastUpdate", out var lastUpdateObj) &&
-                                    lastUpdateObj != null && DateTime.TryParse(lastUpdateObj.ToString(), out var lastUpdate))
-                                {
-                                    process.EndTime = lastUpdate;
-                                }
-
-                                // Determine if service
-                                if (processDict.TryGetValue("type", out var typeObj) && typeObj != null)
-                                {
-                                    var type = typeObj.ToString();
-                                    process.IsService = type.Equals("service", StringComparison.OrdinalIgnoreCase) ||
-                                                       type.Equals("daemon", StringComparison.OrdinalIgnoreCase);
-                                }
-
-                                process.LastSeen = DateTime.UtcNow;
-                            }
-                        }
-                    }
-                }
-            }
-            catch (Exception ex)
-            {
-                _lastError = $"Failed to parse process data: {ex.Message}";
-            }
+          }
         }
         catch (Exception ex)
         {
-            _lastError = $"Data extraction error: {ex.Message}";
+          AddLog("monitor", "debug", $"Failed to process metrics: {ex.Message}");
         }
+      }
     }
-
-    private void UpdateProcessState(ProcessState process)
+    catch (OperationCanceledException)
     {
-        if (process == null || string.IsNullOrEmpty(process.Id)) return;
+      AddLog("monitor", "debug", "Metrics monitoring cancelled");
+    }
+    catch (Exception ex)
+    {
+      AddLog("monitor", "error", $"Metrics monitor error: {ex.Message}");
+    }
+  }
+  private async Task MonitorLogsAsync(CancellationToken cancellationToken)
+  {
+    try
+    {
+      await foreach (var logData in _bus.SubscribeAsync<object>("ghost:logs:*", cancellationToken))
+      {
+        if (!_monitoring) break;
 
-        if (!_processes.TryGetValue(process.Id, out var existingProcess))
+        try
         {
-            // New process
-            _processes[process.Id] = process;
-            process.LastSeen = DateTime.UtcNow;
+          ProcessLogMessage(logData);
+          _lastUpdate = DateTime.UtcNow;
         }
+        catch (Exception ex)
+        {
+          AddLog("monitor", "debug", $"Failed to process log: {ex.Message}");
+        }
+      }
+    }
+    catch (OperationCanceledException)
+    {
+      // Expected when cancelling
+    }
+    catch (Exception ex)
+    {
+      AddLog("monitor", "error", $"Log monitor error: {ex.Message}");
+    }
+  }
+
+  private async Task PollProcessesAsync()
+  {
+    try
+    {
+      AddLog("monitor", "debug", "Starting daemon polling...");
+
+      // Send a ping command to check if daemon is alive
+      var pingCommand = new SystemCommand
+      {
+          CommandId = Guid.NewGuid().ToString(),
+          CommandType = "ping",
+          Parameters = new Dictionary<string, string>
+          {
+              ["responseChannel"] = $"ghost:responses:{Guid.NewGuid()}"
+          }
+      };
+
+      var responseChannel = pingCommand.Parameters["responseChannel"];
+      AddLog("monitor", "debug", $"Polling with ping command {pingCommand.CommandId}");
+
+      // Create a task to wait for response
+      var responseTask = Task.Run(async () =>
+      {
+        try
+        {
+          using var cts = new CancellationTokenSource(3000); // 3 second timeout
+
+          await foreach (var response in _bus.SubscribeAsync<CommandResponse>(responseChannel, cts.Token))
+          {
+            if (response != null && response.CommandId == pingCommand.CommandId && response.Success)
+            {
+              return true;
+            }
+          }
+          return false;
+        }
+        catch (OperationCanceledException)
+        {
+          return false;
+        }
+        catch (Exception)
+        {
+          return false;
+        }
+      });
+
+      // Send the ping command
+      await _bus.PublishAsync("ghost:commands", pingCommand);
+
+      // Wait for response
+      bool wasDaemonAlive = _daemonAlive;
+      _daemonAlive = await responseTask;
+
+      if (wasDaemonAlive != _daemonAlive)
+      {
+        if (_daemonAlive)
+          AddLog("monitor", "info", "Daemon connection established");
         else
-        {
-            // Update existing process
-            existingProcess.IsRunning = process.IsRunning;
-            existingProcess.Name = process.Name ?? existingProcess.Name;
-            existingProcess.IsService = process.IsService;
+          AddLog("monitor", "warn", "Daemon connection lost");
+      }
 
-            if (process.StartTime != default)
-            {
-                existingProcess.StartTime = process.StartTime;
-            }
+      // If no processes selected but some exist, select the first one
+      if (string.IsNullOrEmpty(_selectedProcessId) && _processes.Count > 0)
+      {
+        _selectedProcessId = _processes.Keys.FirstOrDefault();
+      }
 
-            if (!process.IsRunning && process.EndTime.HasValue)
-            {
-                existingProcess.EndTime = process.EndTime;
-            }
-            else if (!process.IsRunning && !existingProcess.EndTime.HasValue)
-            {
-                existingProcess.EndTime = DateTime.UtcNow;
-            }
-            else if (process.IsRunning)
-            {
-                existingProcess.EndTime = null;
-            }
-
-            existingProcess.LastSeen = DateTime.UtcNow;
-        }
+      AddLog("monitor", "debug", $"Polling completed: daemon={_daemonAlive}, processes={_processes.Count}");
     }
-
-    private async Task MonitorProcessMetricsAsync(LiveDisplayContext ctx, Settings settings)
+    catch (Exception ex)
     {
+      AddLog("monitor", "error", $"Error in process polling: {ex.Message}");
+    }
+  }
+
+
+  private async Task ProcessEventMessage(object message)
+  {
+    try
+    {
+      var processInfo = await ExtractProcessInfoFromEvent(message);
+      if (processInfo != null)
+      {
+        UpdateProcess(processInfo);
+      }
+    }
+    catch (Exception ex)
+    {
+      AddLog("monitor", "debug", $"Failed to process event message: {ex.Message}");
+    }
+  }
+
+  private async Task<GhostProcessInfo> ExtractProcessInfoFromEvent(object message)
+  {
+    try
+    {
+      var json = JsonSerializer.Serialize(message);
+      var eventData = JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(json);
+
+      if (eventData == null) return null;
+
+      if (!eventData.TryGetValue("Id", out var idElement) ||
+          idElement.ValueKind == JsonValueKind.Undefined)
+        return null;
+
+      var id = idElement.ToString();
+      if (string.IsNullOrEmpty(id))
+        return null;
+
+      string name = null;
+      if (eventData.TryGetValue("ProcessName", out var nameElement) &&
+          nameElement.ValueKind != JsonValueKind.Undefined)
+        name = nameElement.ToString();
+      else if (eventData.TryGetValue("Name", out nameElement) &&
+               nameElement.ValueKind != JsonValueKind.Undefined)
+        name = nameElement.ToString();
+
+      string status = null;
+      if (eventData.TryGetValue("Status", out var statusElement) &&
+          statusElement.ValueKind != JsonValueKind.Undefined)
+        status = statusElement.ToString();
+
+      if (string.IsNullOrEmpty(status) && eventData.TryGetValue("EventType", out var eventTypeElement) &&
+          eventTypeElement.ValueKind != JsonValueKind.Undefined)
+      {
+        var eventType = eventTypeElement.ToString().ToLowerInvariant();
+        status = eventType switch
+        {
+            "process_started" or "process_registered" or "process_discovered" => "online",
+            "process_stopped" => "stopped",
+            "process_failed" or "process_error" => "errored",
+            _ => "unknown"
+        };
+      }
+
+      string mode = null;
+      if (eventData.TryGetValue("Mode", out var modeElement) &&
+          modeElement.ValueKind != JsonValueKind.Undefined)
+        mode = modeElement.ToString();
+      else if (eventData.TryGetValue("ProcessType", out modeElement) &&
+               modeElement.ValueKind != JsonValueKind.Undefined)
+        mode = modeElement.ToString();
+      else if (eventData.TryGetValue("Type", out modeElement) &&
+               modeElement.ValueKind != JsonValueKind.Undefined)
+        mode = modeElement.ToString();
+
+      return new GhostProcessInfo
+      {
+          Id = id,
+          Name = name ?? GetDisplayName(id),
+          Status = status ?? "unknown",
+          Mode = mode ?? "app",
+          StartTime = DateTime.UtcNow,
+          User = Environment.UserName
+      };
+    }
+    catch (Exception ex)
+    {
+      AddLog("monitor", "debug", $"Failed to extract process info: {ex.Message}");
+      return null;
+    }
+  }
+
+  private void UpdateProcess(GhostProcessInfo processInfo)
+  {
+    lock (_lockObject)
+    {
+      var existing = _processes.TryGetValue(processInfo.Id, out var current);
+
+      if (!existing)
+      {
+        _processes[processInfo.Id] = processInfo;
+        _totalProcesses = _processes.Count;
+
+        AddLog("monitor", "info", $"Discovered process: {processInfo.Name} ({GetShortId(processInfo.Id)}) - {processInfo.Status}");
+
+        if (string.IsNullOrEmpty(_selectedProcessId))
+        {
+          _selectedProcessId = processInfo.Id;
+        }
+      } else
+      {
+        if (current.Status != processInfo.Status && !string.IsNullOrEmpty(processInfo.Status))
+        {
+          AddLog("monitor", "info", $"Process {current.Name} ({GetShortId(current.Id)}) changed status: {current.Status} -> {processInfo.Status}");
+        }
+
+        current.Name = processInfo.Name ?? current.Name;
+        current.Status = processInfo.Status ?? current.Status;
+        current.Mode = processInfo.Mode ?? current.Mode;
+        current.StartTime = processInfo.StartTime ?? current.StartTime;
+        current.Restarts = processInfo.Restarts ?? current.Restarts;
+        current.User = processInfo.User ?? current.User;
+      }
+
+      _onlineProcesses = _processes.Values.Count(p => p.Status?.ToLowerInvariant() == "online");
+      _lastUpdate = DateTime.UtcNow;
+
+      if ((processInfo.Status?.ToLowerInvariant() == "stopped" ||
+           processInfo.Status?.ToLowerInvariant() == "errored") && existing)
+      {
+        var historyEntry = new GhostProcessInfo
+        {
+            Id = processInfo.Id,
+            Name = processInfo.Name ?? current.Name,
+            Status = processInfo.Status,
+            Mode = processInfo.Mode ?? current.Mode,
+            StartTime = current.StartTime,
+            EndTime = DateTime.UtcNow,
+            Restarts = current.Restarts,
+            User = current.User
+        };
+
+        _processHistory.Add(historyEntry);
+        _processes.Remove(processInfo.Id);
+        _totalProcesses = _processes.Count + _processHistory.Count;
+
+        if (_selectedProcessId == processInfo.Id)
+        {
+          _selectedProcessId = _processes.Keys.FirstOrDefault();
+        }
+
+        AddLog("monitor", "info",
+            $"Process {historyEntry.Name} ({GetShortId(historyEntry.Id)}) {historyEntry.Status} " +
+            $"after {FormatDuration(historyEntry.EndTime.Value - (historyEntry.StartTime ?? historyEntry.EndTime.Value))}");
+      }
+    }
+  }
+
+  private void UpdateProcessWithMetrics(string processId, ProcessMetrics metrics)
+  {
+    lock (_lockObject)
+    {
+      if (_processes.TryGetValue(processId, out var process))
+      {
+        process.CpuUsage = metrics.CpuPercentage;
+        process.MemoryUsage = metrics.MemoryBytes;
+
+        if (process.Status?.ToLowerInvariant() != "online")
+        {
+          AddLog("monitor", "info", $"Process {process.Name} ({GetShortId(process.Id)}) is now online");
+          process.Status = "online";
+          _onlineProcesses = _processes.Values.Count(p => p.Status?.ToLowerInvariant() == "online");
+        }
+      } else
+      {
+        var newProcess = new GhostProcessInfo
+        {
+            Id = processId,
+            Name = GetDisplayName(processId),
+            Status = "online",
+            Mode = "app",
+            CpuUsage = metrics.CpuPercentage,
+            MemoryUsage = metrics.MemoryBytes,
+            StartTime = DateTime.UtcNow,
+            User = Environment.UserName
+        };
+
+        _processes[processId] = newProcess;
+        _totalProcesses = _processes.Count;
+        _onlineProcesses = _processes.Values.Count(p => p.Status?.ToLowerInvariant() == "online");
+
+        AddLog("monitor", "info", $"Discovered process from metrics: {newProcess.Name} ({GetShortId(newProcess.Id)})");
+
+        if (string.IsNullOrEmpty(_selectedProcessId))
+        {
+          _selectedProcessId = processId;
+        }
+      }
+    }
+  }
+
+  private void ProcessLogMessage(object logData)
+  {
+    try
+    {
+      var logEntry = ExtractLogEntry(logData);
+      if (logEntry != null)
+      {
+        if (logEntry.Message?.Contains("Spectre.Console") == true)
+          return;
+
+        lock (_lockObject)
+        {
+          _logs.Add(logEntry);
+
+          if (_logs.Count > 100)
+          {
+            _logs.RemoveAt(0);
+          }
+        }
+      }
+    }
+    catch (Exception ex)
+    {
+      AddLog("monitor", "debug", $"Error extracting log entry: {ex.Message}");
+    }
+  }
+
+  private LogEntry ExtractLogEntry(object logData)
+  {
+    try
+    {
+      if (logData is string stringData)
+      {
+        return new LogEntry
+        {
+            Timestamp = DateTime.Now,
+            Source = "unknown",
+            Level = "info",
+            Message = stringData
+        };
+      }
+
+      try
+      {
+        var json = JsonSerializer.Serialize(logData);
+        var logDict = JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(json);
+
+        if (logDict != null)
+        {
+          var timestamp = DateTime.Now;
+          if (logDict.TryGetValue("Timestamp", out var tsElement) &&
+              tsElement.ValueKind != JsonValueKind.Undefined &&
+              DateTime.TryParse(tsElement.ToString(), out var parsedTs))
+          {
+            timestamp = parsedTs;
+          }
+
+          string source = "unknown";
+          if (logDict.TryGetValue("Source", out var srcElement) &&
+              srcElement.ValueKind != JsonValueKind.Undefined)
+          {
+            source = srcElement.ToString();
+          }
+
+          string level = "info";
+          if (logDict.TryGetValue("Level", out var levelElement) &&
+              levelElement.ValueKind != JsonValueKind.Undefined)
+          {
+            level = levelElement.ToString();
+          }
+
+          string message = "";
+          if (logDict.TryGetValue("Message", out var msgElement) &&
+              msgElement.ValueKind != JsonValueKind.Undefined)
+          {
+            message = msgElement.ToString();
+          }
+
+          return new LogEntry
+          {
+              Timestamp = timestamp,
+              Source = source,
+              Level = level,
+              Message = message
+          };
+        }
+      }
+      catch
+      {
+        // Continue to fallback
+      }
+
+      return new LogEntry
+      {
+          Timestamp = DateTime.Now,
+          Source = "ghost",
+          Level = "info",
+          Message = logData?.ToString() ?? ""
+      };
+    }
+    catch
+    {
+      return new LogEntry
+      {
+          Timestamp = DateTime.Now,
+          Source = "unknown",
+          Level = "debug",
+          Message = "Failed to parse log entry"
+      };
+    }
+  }
+
+  private void AddLog(string source, string level, string message)
+  {
+    lock (_lockObject)
+    {
+      _logs.Add(new LogEntry
+      {
+          Timestamp = DateTime.Now,
+          Source = source,
+          Level = level,
+          Message = message
+      });
+
+      if (_logs.Count > 100)
+      {
+        _logs.RemoveAt(0);
+      }
+    }
+  }
+
+  private string ExtractProcessIdFromTopic(string topic)
+  {
+    if (topic.StartsWith("ghost:metrics:"))
+      return topic.Substring("ghost:metrics:".Length);
+    if (topic.StartsWith("ghost:events:"))
+      return topic.Substring("ghost:events:".Length);
+    return "";
+  }
+
+  private async Task<ProcessMetrics> ExtractMetricsAsync(object metricsData, string processId)
+  {
+    try
+    {
+      if (metricsData is ProcessMetrics typedMetrics)
+        return typedMetrics;
+
+      try
+      {
+        var serialized = MemoryPackSerializer.Serialize(metricsData);
+        return MemoryPackSerializer.Deserialize<ProcessMetrics>(serialized);
+      }
+      catch
+      {
         try
         {
-            // Determine metrics channel based on settings
-            var filter = settings.ProcessId != null
-                ? $"ghost:metrics:{settings.ProcessId}"
-                : "ghost:metrics:*";
+          var json = JsonSerializer.Serialize(metricsData);
+          var metricsDict = JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(json);
 
-            // Subscribe to metrics updates
-            await foreach (var metricsData in _bus.SubscribeAsync<object>(filter, _monitoringCts.Token))
-            {
-                if (!_watching || _monitoringCts.IsCancellationRequested) break;
-
-                try
-                {
-                    // Extract processId from topic pattern
-                    var topic = _bus.GetLastTopic();
-                    var processId = topic.Substring("ghost:metrics:".Length);
-
-                    // Handle different metrics formats
-                    ProcessMetrics metrics = await ExtractMetricsFromData(metricsData, processId);
-
-                    if (metrics != null)
-                    {
-                        // Store latest metrics
-                        _latestMetrics[processId] = metrics;
-
-                        // Update process state if we have this process
-                        if (_processes.TryGetValue(processId, out var process))
-                        {
-                            process.LastMetrics = metrics;
-                            process.IsRunning = true; // If we're getting metrics, process is running
-                            process.LastSeen = DateTime.UtcNow;
-
-                            // If it previously was marked as not running, reset end time
-                            if (process.EndTime.HasValue)
-                            {
-                                process.EndTime = null;
-                            }
-                        }
-                        else
-                        {
-                            // We got metrics for a process we don't know about yet
-                            // Create a minimal process state
-                            _processes[processId] = new ProcessState
-                            {
-                                Id = processId,
-                                Name = GetDisplayName(processId),
-                                IsService = DetermineIfService(metrics),
-                                IsRunning = true,
-                                StartTime = DateTime.UtcNow,
-                                LastSeen = DateTime.UtcNow,
-                                LastMetrics = metrics
-                            };
-                        }
-
-                        // Update display
-                        UpdateProcessTables();
-                        ctx.Refresh();
-                    }
-                }
-                catch (Exception ex)
-                {
-                    _lastError = $"Metrics error: {ex.Message}";
-                }
-            }
-        }
-        catch (TaskCanceledException)
-        {
-            // Normal cancellation
-        }
-        catch (Exception ex)
-        {
-            _lastError = $"Metrics subscription error: {ex.Message}";
-        }
-    }
-
-    private async Task<ProcessMetrics> ExtractMetricsFromData(object metricsData, string processId)
-    {
-        try
-        {
-            // If it's already the right type, use it directly
-            if (metricsData is ProcessMetrics typedMetrics)
-            {
-                return typedMetrics;
-            }
-
-            // Try to convert using MemoryPack
-            byte[] serialized = MemoryPackSerializer.Serialize(metricsData);
-
-            try
-            {
-                var metrics = MemoryPackSerializer.Deserialize<ProcessMetrics>(serialized);
-                if (metrics != null)
-                {
-                    return metrics;
-                }
-            }
-            catch { /* Continue with other methods */ }
-
-            // Try to extract as properties dictionary
-            try
-            {
-                var propDict = MemoryPackSerializer.Deserialize<Dictionary<string, object>>(serialized);
-                if (propDict != null)
-                {
-                    return new ProcessMetrics(
-                        ProcessId: processId,
-                        CpuPercentage: TryGetValue<double>(propDict, "CpuPercentage", 0),
-                        MemoryBytes: TryGetValue<long>(propDict, "MemoryBytes", 0),
-                        ThreadCount: TryGetValue<int>(propDict, "ThreadCount", 0),
-                        Timestamp: TryGetValue<DateTime>(propDict, "Timestamp", DateTime.UtcNow),
-                        HandleCount: TryGetValue<int>(propDict, "HandleCount", 0),
-                        GcTotalMemory: TryGetValue<long>(propDict, "GcTotalMemory", 0),
-                        Gen0Collections: TryGetValue<long>(propDict, "Gen0Collections", 0),
-                        Gen1Collections: TryGetValue<long>(propDict, "Gen1Collections", 0),
-                        Gen2Collections: TryGetValue<long>(propDict, "Gen2Collections", 0)
-                    );
-                }
-            }
-            catch { /* Continue with other methods */ }
-
-            // Last resort: use reflection to extract properties
-            return ExtractMetricsWithReflection(metricsData, processId);
-        }
-        catch (Exception ex)
-        {
-            _lastError = $"Error extracting metrics: {ex.Message}";
-            return null;
-        }
-    }
-
-    private ProcessMetrics ExtractMetricsWithReflection(object metricsData, string processId)
-    {
-        if (metricsData == null) return null;
-
-        var type = metricsData.GetType();
-
-        double cpuPercentage = 0;
-        long memoryBytes = 0;
-        int threadCount = 0;
-        int handleCount = 0;
-        long gcTotalMemory = 0;
-        long gen0Collections = 0;
-        long gen1Collections = 0;
-        long gen2Collections = 0;
-
-        // Try to read properties using reflection
-        var cpuProp = type.GetProperty("CpuPercentage") ?? type.GetProperty("CpuUsage");
-        if (cpuProp != null)
-        {
-            var value = cpuProp.GetValue(metricsData);
-            if (value != null) double.TryParse(value.ToString(), out cpuPercentage);
-        }
-
-        var memProp = type.GetProperty("MemoryBytes") ?? type.GetProperty("Memory") ?? type.GetProperty("WorkingSet64");
-        if (memProp != null)
-        {
-            var value = memProp.GetValue(metricsData);
-            if (value != null) long.TryParse(value.ToString(), out memoryBytes);
-        }
-
-        var threadProp = type.GetProperty("ThreadCount") ?? type.GetProperty("Threads");
-        if (threadProp != null)
-        {
-            var value = threadProp.GetValue(metricsData);
-            if (value != null) int.TryParse(value.ToString(), out threadCount);
-        }
-
-        var handleProp = type.GetProperty("HandleCount") ?? type.GetProperty("Handles");
-        if (handleProp != null)
-        {
-            var value = handleProp.GetValue(metricsData);
-            if (value != null) int.TryParse(value.ToString(), out handleCount);
-        }
-
-        var gcProp = type.GetProperty("GcTotalMemory");
-        if (gcProp != null)
-        {
-            var value = gcProp.GetValue(metricsData);
-            if (value != null) long.TryParse(value.ToString(), out gcTotalMemory);
-        }
-
-        var gen0Prop = type.GetProperty("Gen0Collections");
-        if (gen0Prop != null)
-        {
-            var value = gen0Prop.GetValue(metricsData);
-            if (value != null) long.TryParse(value.ToString(), out gen0Collections);
-        }
-
-        var gen1Prop = type.GetProperty("Gen1Collections");
-        if (gen1Prop != null)
-        {
-            var value = gen1Prop.GetValue(metricsData);
-            if (value != null) long.TryParse(value.ToString(), out gen1Collections);
-        }
-
-        var gen2Prop = type.GetProperty("Gen2Collections");
-        if (gen2Prop != null)
-        {
-            var value = gen2Prop.GetValue(metricsData);
-            if (value != null) long.TryParse(value.ToString(), out gen2Collections);
-        }
-
-        return new ProcessMetrics(
-            ProcessId: processId,
-            CpuPercentage: cpuPercentage,
-            MemoryBytes: memoryBytes,
-            ThreadCount: threadCount,
-            Timestamp: DateTime.UtcNow,
-            HandleCount: handleCount,
-            GcTotalMemory: gcTotalMemory,
-            Gen0Collections: gen0Collections,
-            Gen1Collections: gen1Collections,
-            Gen2Collections: gen2Collections
-        );
-    }
-
-    private T TryGetValue<T>(Dictionary<string, object> dict, string key, T defaultValue)
-    {
-        if (dict == null || !dict.TryGetValue(key, out var value) || value == null)
-            return defaultValue;
-
-        if (value is T typedValue)
-            return typedValue;
-
-        try
-        {
-            return (T)Convert.ChangeType(value, typeof(T));
+          if (metricsDict != null)
+          {
+            return new ProcessMetrics(
+                ProcessId: processId,
+                CpuPercentage: TryGetDouble(metricsDict, "CpuPercentage"),
+                MemoryBytes: TryGetLong(metricsDict, "MemoryBytes"),
+                ThreadCount: TryGetInt(metricsDict, "ThreadCount"),
+                Timestamp: DateTime.UtcNow,
+                HandleCount: TryGetInt(metricsDict, "HandleCount"),
+                GcTotalMemory: TryGetLong(metricsDict, "GcTotalMemory"),
+                Gen0Collections: TryGetLong(metricsDict, "Gen0Collections"),
+                Gen1Collections: TryGetLong(metricsDict, "Gen1Collections"),
+                Gen2Collections: TryGetLong(metricsDict, "Gen2Collections")
+            );
+          }
         }
         catch
         {
-            return defaultValue;
+          // Continue to last attempt
         }
-    }
+      }
 
-    private void UpdateProcessTables()
+      return null;
+    }
+    catch
     {
-        _servicesTable.Rows.Clear();
-        _oneShotAppsTable.Rows.Clear();
-
-        // Split processes into services and one-shot apps and sort them
-        var services = _processes.Values
-            .Where(p => p.IsService)
-            .OrderByDescending(p => p.IsRunning)
-            .ThenBy(p => p.Name)
-            .ToList();
-
-        var oneShots = _processes.Values
-            .Where(p => !p.IsService)
-            .OrderByDescending(p => p.IsRunning)
-            .ThenByDescending(p => p.StartTime)
-            .ToList();
-
-        // Check for stalled processes
-        var now = DateTime.UtcNow;
-        var stalledThreshold = TimeSpan.FromSeconds(15);
-
-        foreach (var process in _processes.Values)
-        {
-            if (process.IsRunning && now - process.LastSeen > stalledThreshold)
-            {
-                process.IsRunning = false;
-                process.EndTime = process.LastSeen;
-            }
-        }
-
-        // Add services to the services table
-        foreach (var service in services)
-        {
-            string statusColor = service.IsRunning ? "green" : "grey";
-            string statusText = service.IsRunning ? "Running" : "Stopped";
-
-            var resourceUsage = GetResourceUsageText(service);
-            var uptime = service.IsRunning && service.StartTime != default
-                ? FormatTimeSpan(DateTime.UtcNow - service.StartTime)
-                : "";
-
-            _servicesTable.AddRow(
-                service.Name,
-                $"[{statusColor}]{statusText}[/]",
-                FormatDateTime(service.StartTime),
-                uptime,
-                resourceUsage,
-                service.IsRunning ? $"[blue][[Stop]][/]" : $"[green][[Start]][/]"
-            );
-        }
-
-        // Add one-shot apps to the one-shot table
-        foreach (var app in oneShots)
-        {
-            string statusColor = app.IsRunning ? "green" : "grey";
-            string statusText = app.IsRunning ? "Running" : "Completed";
-
-            var resourceUsage = GetResourceUsageText(app);
-
-            _oneShotAppsTable.AddRow(
-                app.IsRunning ? $"[bold]{app.Name}[/]" : app.Name,
-                $"[{statusColor}]{statusText}[/]",
-                FormatDateTime(app.StartTime),
-                app.EndTime.HasValue ? FormatDateTime(app.EndTime.Value) : "",
-                resourceUsage
-            );
-        }
+      return null;
     }
+  }
 
-    private string GetResourceUsageText(ProcessState process)
+  private double TryGetDouble(Dictionary<string, JsonElement> dict, string key)
+  {
+    if (dict.TryGetValue(key, out var element) &&
+        (element.ValueKind == JsonValueKind.Number || element.ValueKind == JsonValueKind.String))
     {
-        if (!process.IsRunning || process.LastMetrics == null)
-            return "";
-
-        return $"CPU: {process.LastMetrics.CpuPercentage:F1}%, Mem: {FormatBytes(process.LastMetrics.MemoryBytes)}";
+      if (double.TryParse(element.ToString(), out var result))
+        return result;
     }
+    return 0.0;
+  }
 
-    private bool DetermineIfService(ProcessState process)
+  private long TryGetLong(Dictionary<string, JsonElement> dict, string key)
+  {
+    if (dict.TryGetValue(key, out var element) &&
+        (element.ValueKind == JsonValueKind.Number || element.ValueKind == JsonValueKind.String))
     {
-        return process.Id.Contains("service", StringComparison.OrdinalIgnoreCase) ||
-               process.Id.Contains("daemon", StringComparison.OrdinalIgnoreCase) ||
-               process.Id == "ghost-daemon" ||
-               process.Id.EndsWith("d", StringComparison.OrdinalIgnoreCase);
+      if (long.TryParse(element.ToString(), out var result))
+        return result;
     }
+    return 0L;
+  }
 
-    private bool DetermineIfService(ProcessMetrics metrics)
+  private int TryGetInt(Dictionary<string, JsonElement> dict, string key)
+  {
+    if (dict.TryGetValue(key, out var element) &&
+        (element.ValueKind == JsonValueKind.Number || element.ValueKind == JsonValueKind.String))
     {
-        // In a real implementation, this would use metadata from the process itself
-        return metrics.ProcessId.Contains("service", StringComparison.OrdinalIgnoreCase) ||
-               metrics.ProcessId.Contains("daemon", StringComparison.OrdinalIgnoreCase) ||
-               metrics.ProcessId == "ghost-daemon" ||
-               metrics.ProcessId.EndsWith("d", StringComparison.OrdinalIgnoreCase);
+      if (int.TryParse(element.ToString(), out var result))
+        return result;
     }
+    return 0;
+  }
 
-    private string GetDisplayName(string processId)
+  private string GetDisplayName(string processId)
+  {
+    if (string.IsNullOrEmpty(processId)) return "unknown";
+
+    if (processId.StartsWith("app-") && processId.Length > 12)
+      return processId.Substring(4, 8);
+    if (processId.StartsWith("ghost-"))
+      return processId.Substring(6);
+    return processId.Length > 12 ? processId.Substring(0, 12) : processId;
+  }
+
+  private string GetShortId(string id)
+  {
+    if (string.IsNullOrEmpty(id)) return "unknown";
+    if (id.Length <= 8) return id;
+    if (id.StartsWith("app-") && id.Length > 12)
+      return id.Substring(4, 8);
+    return id.Substring(0, 8);
+  }
+
+  private string GetShortName(string name)
+  {
+    if (string.IsNullOrEmpty(name)) return "unknown";
+    return name.Length > 12 ? name.Substring(0, 12) : name;
+  }
+
+  private string FormatBytes(long bytes)
+  {
+    string[] suffix =
     {
-        // Try to extract a friendly name from the process ID
-        if (processId.StartsWith("ghost:"))
-        {
-            return processId.Substring(6);
-        }
-
-        // Remove any GUID-like suffixes
-        if (processId.Length > 36 && processId[^36] == '-' && Guid.TryParse(processId.Substring(processId.Length - 36), out _))
-        {
-            return processId.Substring(0, processId.Length - 37);
-        }
-
-        return processId;
-    }
-
-    private string FormatDateTime(DateTime dt)
+        "B", "KB",
+        "MB", "GB"
+    };
+    int i;
+    double dblBytes = bytes;
+    for(i = 0; i < suffix.Length && bytes >= 1024; i++, bytes /= 1024)
     {
-        if (dt == default) return "";
-
-        // Convert to local time
-        var localDt = dt.ToLocalTime();
-
-        // If it's today, just show the time
-        if (localDt.Date == DateTime.Today)
-        {
-            return localDt.ToString("HH:mm:ss");
-        }
-
-        // If it's this year, show date without year
-        if (localDt.Year == DateTime.Today.Year)
-        {
-            return localDt.ToString("MMM dd HH:mm");
-        }
-
-        // Otherwise show date with year
-        return localDt.ToString("yyyy-MM-dd HH:mm");
+      dblBytes = bytes / 1024.0;
     }
+    return $"{dblBytes:0.#}{suffix[i]}";
+  }
 
-    private string FormatTimeAgo(DateTime dt)
-    {
-        var span = DateTime.UtcNow - dt;
-
-        if (span.TotalSeconds < 60)
-            return $"{span.TotalSeconds:F0}s ago";
-
-        if (span.TotalMinutes < 60)
-            return $"{span.TotalMinutes:F0}m ago";
-
-        if (span.TotalHours < 24)
-            return $"{span.TotalHours:F0}h ago";
-
-        return $"{span.TotalDays:F0}d ago";
-    }
-
-    private string FormatTimeSpan(TimeSpan span)
-    {
-        if (span.TotalDays >= 1)
-            return $"{span.TotalDays:F1}d";
-
-        if (span.TotalHours >= 1)
-            return $"{span.TotalHours:F1}h";
-
-        if (span.TotalMinutes >= 1)
-            return $"{span.TotalMinutes:F1}m";
-
-        return $"{span.TotalSeconds:F0}s";
-    }
-
-    private static string FormatBytes(long bytes)
-    {
-        string[] suffix = { "B", "KB", "MB", "GB", "TB" };
-        int i;
-        double dblBytes = bytes;
-        for (i = 0; i < suffix.Length && bytes >= 1024; i++, bytes /= 1024)
-        {
-            dblBytes = bytes / 1024.0;
-        }
-        return $"{dblBytes:0.##}{suffix[i]}";
-    }
-
-    private async Task HandleUserInputAsync(LiveDisplayContext ctx)
-    {
-        while (_watching && !_monitoringCts.IsCancellationRequested)
-        {
-            if (Console.KeyAvailable)
-            {
-                var key = Console.ReadKey(true);
-
-                switch (key.Key)
-                {
-                    case ConsoleKey.R:
-                        // Refresh
-                        AnsiConsole.MarkupLine("[grey]Refreshing process list...[/]");
-                        await FetchInitialProcessList(ctx);
-                        break;
-
-                    case ConsoleKey.S:
-                        // Stop a process
-                        var runningProcesses = _processes.Values
-                            .Where(p => p.IsRunning)
-                            .Select(p => $"{p.Id}: {p.Name}")
-                            .ToList();
-
-                        if (runningProcesses.Count > 0)
-                        {
-                            var selection = AnsiConsole.Prompt(
-                                new SelectionPrompt<string>()
-                                    .Title("Select a process to [red]stop[/]")
-                                    .AddChoices(runningProcesses));
-
-                            var processId = selection.Split(':')[0].Trim();
-                            await SendControlCommandAsync(processId, "stop");
-                            await Task.Delay(1000);
-                            await FetchInitialProcessList(ctx);
-                        }
-                        else
-                        {
-                            AnsiConsole.MarkupLine("[yellow]No running processes to stop[/]");
-                        }
-                        break;
-
-                    case ConsoleKey.A:
-                        // Start a process
-                        var stoppedProcesses = _processes.Values
-                            .Where(p => !p.IsRunning)
-                            .Select(p => $"{p.Id}: {p.Name}")
-                            .ToList();
-
-                        if (stoppedProcesses.Count > 0)
-                        {
-                            var selection = AnsiConsole.Prompt(
-                                new SelectionPrompt<string>()
-                                    .Title("Select a process to [green]start[/]")
-                                    .AddChoices(stoppedProcesses));
-
-                            var processId = selection.Split(':')[0].Trim();
-                            await SendControlCommandAsync(processId, "start");
-                            await Task.Delay(1000);
-                            await FetchInitialProcessList(ctx);
-                        }
-                        else
-                        {
-                            AnsiConsole.MarkupLine("[yellow]No stopped processes to start[/]");
-                        }
-                        break;
-
-                    case ConsoleKey.Q:
-                        // Quit
-                        AnsiConsole.MarkupLine("[grey]Exiting monitor...[/]");
-                        _watching = false;
-                        return;
-                }
-            }
-
-            await Task.Delay(100);
-        }
-    }
-
-    private async Task SendControlCommandAsync(string processId, string commandType)
-    {
-        try
-        {
-            AnsiConsole.MarkupLine($"[grey]Sending {commandType} command for process {processId}...[/]");
-
-            var responseChannel = $"ghost:responses:{Guid.NewGuid()}";
-            var command = new SystemCommand
-            {
-                CommandId = Guid.NewGuid().ToString(),
-                CommandType = commandType,
-                Parameters = new Dictionary<string, string>
-                {
-                    ["processId"] = processId,
-                    ["responseChannel"] = responseChannel
-                }
-            };
-
-            await _bus.PublishAsync("ghost:commands", command);
-
-            // Wait for response
-            var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
-
-            try
-            {
-                await foreach (var response in _bus.SubscribeAsync<CommandResponse>(responseChannel, cts.Token))
-                {
-                    if (response.CommandId == command.CommandId)
-                    {
-                        if (response.Success)
-                        {
-                            AnsiConsole.MarkupLine($"[green]Process {processId} {commandType} command sent successfully[/]");
-
-                            // Update process state immediately
-                            if (_processes.TryGetValue(processId, out var process))
-                            {
-                                process.IsRunning = commandType == "start";
-                                if (commandType == "start")
-                                {
-                                    process.StartTime = DateTime.UtcNow;
-                                    process.EndTime = null;
-                                }
-                                else if (commandType == "stop")
-                                {
-                                    process.EndTime = DateTime.UtcNow;
-                                }
-                            }
-                        }
-                        else
-                        {
-                            _lastError = response.Error ?? $"Failed to {commandType} process";
-                            AnsiConsole.MarkupLine($"[red]Process {processId} {commandType} command failed:[/] {response.Error}");
-                        }
-                        break;
-                    }
-                }
-            }
-            catch (OperationCanceledException)
-            {
-                _lastError = $"Timeout waiting for {commandType} command response";
-                AnsiConsole.MarkupLine($"[yellow]Timeout waiting for {commandType} command response[/]");
-            }
-        }
-        catch (Exception ex)
-        {
-            _lastError = ex.Message;
-            AnsiConsole.MarkupLine($"[red]Error sending {commandType} command:[/] {ex.Message}");
-        }
-    }
+  private string FormatDuration(TimeSpan duration)
+  {
+    if (duration.TotalDays >= 1)
+      return $"{(int)duration.TotalDays}d {duration.Hours}h";
+    if (duration.TotalHours >= 1)
+      return $"{(int)duration.TotalHours}h {duration.Minutes}m";
+    if (duration.TotalMinutes >= 1)
+      return $"{(int)duration.TotalMinutes}m";
+    return $"{(int)duration.TotalSeconds}s";
+  }
+}
+public class GhostProcessInfo
+{
+  public string Id { get; set; } = "";
+  public string? Name { get; set; }
+  public string? Status { get; set; }
+  public string? Mode { get; set; }
+  public DateTime? StartTime { get; set; }
+  public DateTime? EndTime { get; set; }
+  public int? Restarts { get; set; }
+  public string? User { get; set; }
+  public double? CpuUsage { get; set; }
+  public long? MemoryUsage { get; set; }
+}
+public class LogEntry
+{
+  public DateTime Timestamp { get; set; }
+  public string Source { get; set; } = "";
+  public string Level { get; set; } = "";
+  public string Message { get; set; } = "";
 }

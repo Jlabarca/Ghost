@@ -1,4 +1,4 @@
-namespace Ghost.Core.Data;
+namespace Ghost.Data;
 
 /// <summary>
 /// Information about a database column

@@ -1,9 +1,9 @@
-using Ghost.Core.Exceptions;
+using Ghost.Exceptions;
 using Microsoft.Extensions.Logging;
 using System.Text;
 using System.Text.RegularExpressions;
 
-namespace Ghost.Core.Data.Implementations
+namespace Ghost.Data.Implementations
 {
   /// <summary>
   /// PostgreSQL implementation of schema management functionality.
@@ -13,7 +13,6 @@ namespace Ghost.Core.Data.Implementations
   public class PostgresSchemaManager : ISchemaManager
   {
     private readonly IDatabaseClient _db;
-    private readonly ILogger<PostgresSchemaManager> _logger;
     private readonly SemaphoreSlim _lock = new SemaphoreSlim(1, 1);
     private bool _initialized;
 
@@ -22,10 +21,9 @@ namespace Ghost.Core.Data.Implementations
     /// </summary>
     /// <param name="db">The database client.</param>
     /// <param name="logger">The logger.</param>
-    public PostgresSchemaManager(IDatabaseClient db, ILogger<PostgresSchemaManager> logger = null)
+    public PostgresSchemaManager(IDatabaseClient db)
     {
       _db = db ?? throw new ArgumentNullException(nameof(db));
-      _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
 
     /// <summary>
@@ -38,7 +36,7 @@ namespace Ghost.Core.Data.Implementations
       await _lock.WaitAsync(ct);
       try
       {
-        _logger.LogDebug("Initializing schema for {Type}", typeof(T).Name);
+        G.LogDebug("Initializing schema for {Type}", typeof(T).Name);
         await InitializeBaseTablesAsync(ct);
 
         // Get entity table information
@@ -50,14 +48,14 @@ namespace Ghost.Core.Data.Implementations
         if (!tableExists)
         {
           await CreateTableAsync(tableName, columns, ct);
-          _logger.LogInformation("Created table {TableName}", tableName);
+          G.LogInfo("Created table {TableName}", tableName);
         } else
         {
           // Validate that the table has the correct schema
           var isValid = await ValidateTableAsync(tableName, columns, ct);
           if (!isValid)
           {
-            _logger.LogWarning("Table {TableName} schema is invalid. Migration may be required.", tableName);
+            G.LogWarn("Table {TableName} schema is invalid. Migration may be required.", tableName);
           }
         }
 
@@ -66,7 +64,7 @@ namespace Ghost.Core.Data.Implementations
       }
       catch (Exception ex)
       {
-        _logger.LogError(ex, "Error initializing schema for {Type}", typeof(T).Name);
+        G.LogError(ex, "Error initializing schema for {Type}", typeof(T).Name);
         throw new GhostException($"Failed to initialize schema for {typeof(T).Name}", ex, ErrorCode.StorageConfigurationFailed);
       }
       finally
@@ -96,7 +94,7 @@ namespace Ghost.Core.Data.Implementations
         // Then initialize each entity type
         foreach (var type in types)
         {
-          _logger.LogDebug("Initializing schema for {Type}", type.Name);
+          G.LogDebug("Initializing schema for {Type}", type.Name);
 
           // Use reflection to call the generic method
           var method = typeof(PostgresSchemaManager)
@@ -113,11 +111,11 @@ namespace Ghost.Core.Data.Implementations
         }
 
         _initialized = true;
-        _logger.LogInformation("Schema initialization completed for {Count} types", types.Length);
+        G.LogInfo($"Schema initialization completed for {types.Length} types");
       }
       catch (Exception ex)
       {
-        _logger.LogError(ex, "Error initializing schema for multiple types");
+        G.LogError(ex, "Error initializing schema for multiple types");
         throw new GhostException("Failed to initialize schema for multiple types", ex, ErrorCode.StorageConfigurationFailed);
       }
       finally
@@ -162,7 +160,7 @@ namespace Ghost.Core.Data.Implementations
       await _lock.WaitAsync(ct);
       try
       {
-        _logger.LogInformation("Migrating schema for {Type}", typeof(T).Name);
+        G.LogInfo("Migrating schema for {Type}", typeof(T).Name);
 
         var tableName = GetTableName<T>();
         var expectedColumns = GetColumns<T>();
@@ -187,7 +185,7 @@ namespace Ghost.Core.Data.Implementations
         foreach (var column in columnsToAdd)
         {
           await AddColumnAsync(tableName, column, ct);
-          _logger.LogInformation("Added column {ColumnName} to {TableName}", column.Name, tableName);
+          G.LogInfo($"Added column {column.Name} to table {tableName}");
         }
 
         // We don't remove or modify columns for safety reasons
@@ -195,11 +193,11 @@ namespace Ghost.Core.Data.Implementations
         // Update indexes
         await CreateIndexesAsync<T>(tableName, ct);
 
-        _logger.LogInformation("Migration completed for {Type}", typeof(T).Name);
+        G.LogInfo("Migration completed for {Type}", typeof(T).Name);
       }
       catch (Exception ex)
       {
-        _logger.LogError(ex, "Error migrating schema for {Type}", typeof(T).Name);
+        G.LogError(ex, "Error migrating schema for {Type}", typeof(T).Name);
         throw new GhostException($"Failed to migrate schema for {typeof(T).Name}", ex, ErrorCode.StorageConfigurationFailed);
       }
       finally
@@ -218,7 +216,7 @@ namespace Ghost.Core.Data.Implementations
       await _lock.WaitAsync(ct);
       try
       {
-        _logger.LogWarning("Resetting entire database schema");
+        G.LogWarn("Resetting entire database schema");
 
         // Get all table names
         var tables = await GetTablesAsync(ct);
@@ -227,15 +225,15 @@ namespace Ghost.Core.Data.Implementations
         foreach (var table in tables)
         {
           await DropTableAsync(table, ct);
-          _logger.LogInformation("Dropped table {TableName}", table);
+          G.LogInfo("Dropped table {TableName}", table);
         }
 
         _initialized = false;
-        _logger.LogWarning("Database schema reset completed");
+        G.LogWarn("Database schema reset completed");
       }
       catch (Exception ex)
       {
-        _logger.LogError(ex, "Error resetting schema");
+        G.LogError(ex, "Error resetting schema");
         throw new GhostException("Failed to reset schema", ex, ErrorCode.StorageConfigurationFailed);
       }
       finally
@@ -257,7 +255,7 @@ namespace Ghost.Core.Data.Implementations
       }
       catch (Exception ex)
       {
-        _logger.LogError(ex, "Error getting table names");
+        G.LogError(ex, "Error getting table names");
         throw new GhostException("Failed to get table names", ex, ErrorCode.StorageOperationFailed);
       }
     }
@@ -273,7 +271,7 @@ namespace Ghost.Core.Data.Implementations
       try
       {
         const string sql = @"
-                    SELECT 
+                    SELECT
                         column_name as Name,
                         data_type as Type,
                         is_nullable = 'YES' as IsNullable,
@@ -307,7 +305,7 @@ namespace Ghost.Core.Data.Implementations
       }
       catch (Exception ex)
       {
-        _logger.LogError(ex, "Error getting columns for table {TableName}", tableName);
+        G.LogError(ex, "Error getting columns for table {TableName}", tableName);
         throw new GhostException($"Failed to get columns for table {tableName}", ex, ErrorCode.StorageOperationFailed);
       }
     }
@@ -360,7 +358,7 @@ namespace Ghost.Core.Data.Implementations
       }
       catch (Exception ex)
       {
-        _logger.LogError(ex, "Error getting indexes for table {TableName}", tableName);
+        G.LogError(ex, "Error getting indexes for table {TableName}", tableName);
         throw new GhostException($"Failed to get indexes for table {tableName}", ex, ErrorCode.StorageOperationFailed);
       }
     }
@@ -520,31 +518,28 @@ namespace Ghost.Core.Data.Implementations
         // Check if column exists
         if (!actualColumnDict.TryGetValue(columnName, out var actualColumn))
         {
-          _logger.LogWarning("Column {ColumnName} does not exist in table {TableName}", expectedColumn.Name, tableName);
+          G.LogWarn($"Column {expectedColumn.Name} does not exist in table {tableName}");
           return false;
         }
 
         // Check column type
         if (!string.Equals(NormalizeType(actualColumn.Type), NormalizeType(expectedColumn.Type), StringComparison.OrdinalIgnoreCase))
         {
-          _logger.LogWarning("Column {ColumnName} has incorrect type. Expected: {ExpectedType}, Actual: {ActualType}",
-              expectedColumn.Name, expectedColumn.Type, actualColumn.Type);
+          G.LogWarn($"Column {expectedColumn.Name} has incorrect type. Expected: {expectedColumn.Type}, Actual: {actualColumn.Type}");
           return false;
         }
 
         // Check nullability
         if (actualColumn.IsNullable != expectedColumn.IsNullable)
         {
-          _logger.LogWarning("Column {ColumnName} has incorrect nullability. Expected: {ExpectedNullable}, Actual: {ActualNullable}",
-              expectedColumn.Name, expectedColumn.IsNullable, actualColumn.IsNullable);
+          G.LogWarn($"Column {expectedColumn.Name} has incorrect nullability. Expected: {expectedColumn.IsNullable}, Actual: {actualColumn.IsNullable}");
           return false;
         }
 
         // Check primary key
         if (actualColumn.IsPrimaryKey != expectedColumn.IsPrimaryKey)
         {
-          _logger.LogWarning("Column {ColumnName} has incorrect primary key setting. Expected: {ExpectedPK}, Actual: {ActualPK}",
-              expectedColumn.Name, expectedColumn.IsPrimaryKey, actualColumn.IsPrimaryKey);
+          G.LogWarn($"Column {expectedColumn.Name} has incorrect primary key status. Expected: {expectedColumn.IsPrimaryKey}, Actual: {actualColumn.IsPrimaryKey}");
           return false;
         }
       }

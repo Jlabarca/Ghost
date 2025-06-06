@@ -2,7 +2,7 @@ using Dapper;
 using Microsoft.Extensions.Logging;
 using Npgsql;
 
-namespace Ghost.Core.Data.Implementations
+namespace Ghost.Data.Implementations
 {
   /// <summary>
   /// PostgreSQL implementation of the database client.
@@ -11,7 +11,6 @@ namespace Ghost.Core.Data.Implementations
   {
     private readonly string _connectionString;
     private readonly SemaphoreSlim _lock = new(1, 1);
-    private readonly ILogger<PostgreSqlClient> _logger;
     private bool _disposed;
 
     /// <summary>
@@ -24,10 +23,9 @@ namespace Ghost.Core.Data.Implementations
     /// </summary>
     /// <param name="connectionString">The connection string to the PostgreSQL database.</param>
     /// <param name="logger">The logger.</param>
-    public PostgreSqlClient(string connectionString, ILogger<PostgreSqlClient> logger)
+    public PostgreSqlClient(string connectionString)
     {
       _connectionString = connectionString ?? throw new ArgumentNullException(nameof(connectionString));
-      _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
 
     /// <summary>
@@ -91,8 +89,8 @@ namespace Ghost.Core.Data.Implementations
       // PostgreSQL-specific query to check if a table exists
       const string sql = @"
                 SELECT EXISTS (
-                    SELECT FROM information_schema.tables 
-                    WHERE table_schema = 'public' 
+                    SELECT FROM information_schema.tables
+                    WHERE table_schema = 'public'
                     AND table_name = @TableName
                 );";
 
@@ -111,8 +109,8 @@ namespace Ghost.Core.Data.Implementations
 
       // PostgreSQL-specific query to get all table names
       const string sql = @"
-                SELECT table_name 
-                FROM information_schema.tables 
+                SELECT table_name
+                FROM information_schema.tables
                 WHERE table_schema = 'public'
                 ORDER BY table_name;";
 
@@ -133,7 +131,7 @@ namespace Ghost.Core.Data.Implementations
       }
       catch (Exception ex)
       {
-        _logger.LogError(ex, "Failed to connect to PostgreSQL database");
+        G.LogError(ex, "Failed to connect to PostgreSQL database");
         return false;
       }
     }

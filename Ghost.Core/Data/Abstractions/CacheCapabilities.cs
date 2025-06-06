@@ -1,4 +1,4 @@
-namespace Ghost.Core.Data;
+namespace Ghost.Data;
 
 /// <summary>
 /// Describes the capabilities of a cache provider

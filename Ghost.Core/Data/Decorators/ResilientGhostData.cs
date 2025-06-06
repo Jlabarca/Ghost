@@ -1,5 +1,6 @@
+using Ghost.Config;
+using Ghost.Logging;
 using System.Net.Sockets;
-using Ghost.Core.Configuration;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Npgsql;
@@ -8,7 +9,7 @@ using Polly.CircuitBreaker;
 using Polly.Retry;
 using StackExchange.Redis;
 
-namespace Ghost.Core.Data.Decorators;
+namespace Ghost.Data.Decorators;
 
 /// <summary>
 /// Decorator that adds resilience patterns to IGhostData operations.
@@ -17,8 +18,8 @@ namespace Ghost.Core.Data.Decorators;
 public class ResilientGhostData : IGhostData
 {
     private readonly IGhostData _inner;
-    private readonly ILogger<ResilientGhostData> _logger;
-    private readonly IOptions<ResilienceConfiguration> _config;
+    private readonly IGhostLogger _logger;
+    private readonly IOptions<ResilienceDataConfig> _config;
 
     private readonly AsyncRetryPolicy _retryPolicy;
     private readonly AsyncCircuitBreakerPolicy _circuitBreakerPolicy;
@@ -34,8 +35,8 @@ public class ResilientGhostData : IGhostData
     /// <param name="config">The resilience configuration.</param>
     public ResilientGhostData(
             IGhostData inner,
-            ILogger<ResilientGhostData> logger,
-            IOptions<ResilienceConfiguration> config)
+            IGhostLogger logger,
+            IOptions<ResilienceDataConfig> config)
     {
         _inner = inner ?? throw new ArgumentNullException(nameof(inner));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));

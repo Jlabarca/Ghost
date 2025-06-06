@@ -1,10 +1,11 @@
+using Ghost.Config;
+using Ghost.Logging;
 using System.Security.Cryptography;
 using System.Text.Json;
-using Ghost.Core.Configuration;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 
-namespace Ghost.Core.Data;
+namespace Ghost.Data;
 
 /// <summary>
 /// Decorator that adds encryption to sensitive data before storing it.
@@ -13,8 +14,8 @@ namespace Ghost.Core.Data;
 public class EncryptedGhostData : IGhostData
 {
     private readonly IGhostData _inner;
-    private readonly ILogger<EncryptedGhostData> _logger;
-    private readonly IOptions<SecurityConfiguration> _config;
+    private readonly IGhostLogger _logger;
+    private readonly IOptions<SecurityDataConfig> _config;
     private readonly Lazy<Aes> _aesProvider;
     private bool _disposed;
 
@@ -31,8 +32,8 @@ public class EncryptedGhostData : IGhostData
     /// <param name="logger">The logger.</param>
     public EncryptedGhostData(
             IGhostData inner,
-            IOptions<SecurityConfiguration> config,
-            ILogger<EncryptedGhostData> logger)
+            IOptions<SecurityDataConfig> config,
+            IGhostLogger logger)
     {
         _inner = inner ?? throw new ArgumentNullException(nameof(inner));
         _config = config ?? throw new ArgumentNullException(nameof(config));

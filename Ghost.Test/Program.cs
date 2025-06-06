@@ -1,10 +1,6 @@
 ﻿using Ghost;
-using Microsoft.Extensions.DependencyInjection;
 
-// Running the app
 new MyApp().Execute(args);
-//await app.StartAsync(args);
-
 
 // Using attribute configuration
 [GhostApp(IsService = false, AutoMonitor = true)]
@@ -13,9 +9,14 @@ public class MyApp : GhostApp
   public MyApp()
   {
     // Register for state changes and errors
-    StateChanged += (sender, state) => Console.WriteLine($"App state: {state}");
-    ErrorOccurred += (sender, ex) => Console.WriteLine($"Error: {ex.Message}");
+    StateChanged += (sender, state) => G.LogInfo($"App state: {state}");
+    ErrorOccurred += (sender, ex) => G.LogInfo(($"Error: {ex.Message}"));
   }
+
+  // protected override void ConfigureServices(IServiceCollection services)
+  // {
+  //
+  // }
 
   public override Task RunAsync(IEnumerable<string> args)
   {
@@ -25,6 +26,7 @@ public class MyApp : GhostApp
   }
 }
 
+//old  GhostServiceApp now GhostApp has a
 // public class MyService : GhostServiceApp
 // {
 //   public MyService()

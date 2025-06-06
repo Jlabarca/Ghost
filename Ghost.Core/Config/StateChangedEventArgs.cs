@@ -1,4 +1,4 @@
-// namespace Ghost.Core.Config;
+// namespace Ghost.Config;
 //
 // /// <summary>
 // /// Types of state changes that can occur

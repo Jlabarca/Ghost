@@ -1,10 +1,10 @@
-using Ghost.Core.Data;
+using Ghost.Data;
 using Microsoft.Extensions.Logging;
 using System.Collections.Concurrent;
 using System.Runtime.CompilerServices;
 using System.Text.Json;
 
-namespace Ghost.Core.Logging;
+namespace Ghost.Logging;
 
 /// <summary>
 /// DEFAULT Base implementation of Ghost logger without external UI dependencies

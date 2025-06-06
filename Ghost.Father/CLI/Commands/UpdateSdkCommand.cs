@@ -150,7 +150,7 @@
 //     // Create the basic core exception and error codes
 //     var coreImplementation = @"using System;
 //
-// namespace Ghost.Core
+// namespace Ghost
 // {
 //     public enum ErrorCode
 //     {
@@ -198,7 +198,7 @@
 //     // Create logging interface
 //     var loggingImplementation = @"using System;
 //
-// namespace Ghost.Core.Logging
+// namespace Ghost.Logging
 // {
 //     public interface ILogger
 //     {
@@ -212,7 +212,7 @@
 //     // Create minimal config
 //     var configImplementation = @"using System.Collections.Generic;
 //
-// namespace Ghost.Core.Config
+// namespace Ghost.Config
 // {
 //     public class GhostConfig
 //     {

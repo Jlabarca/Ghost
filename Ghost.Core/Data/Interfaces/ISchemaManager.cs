@@ -1,4 +1,4 @@
-namespace Ghost.Core.Data;
+namespace Ghost.Data;
 
 /// <summary>
 /// Interface for database schema management

@@ -1,6 +1,6 @@
-using Ghost.Core;
-using Ghost.Core.Exceptions;
-using Ghost.Core.Storage;
+using Ghost;
+using Ghost.Exceptions;
+using Ghost.Storage;
 using Spectre.Console;
 using Spectre.Console.Cli;
 using System.Diagnostics;

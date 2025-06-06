@@ -1,4 +1,4 @@
-// using Ghost.Core.Config;
+// using Ghost.Config;
 //
 // namespace Ghost;
 //

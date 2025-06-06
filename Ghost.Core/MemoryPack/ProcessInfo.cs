@@ -1,7 +1,7 @@
-using Ghost.Core.Exceptions;
+using Ghost.Exceptions;
 using MemoryPack;
 using System.Diagnostics;
-namespace Ghost.Core;
+namespace Ghost;
 
 [MemoryPackable]
 public partial class ProcessInfo : IAsyncDisposable

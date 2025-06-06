@@ -1,4 +1,4 @@
-using Ghost.Core;
+using Ghost;
 
 namespace Ghost.Father.Models;
 

@@ -1,5 +1,5 @@
-using Ghost.Core.Data;
-using Ghost.Core.Storage;
+using Ghost.Data;
+using Ghost.Storage;
 using Microsoft.Extensions.DependencyInjection;
 using Spectre.Console.Cli;
 using System.Reflection;

@@ -1,8 +1,8 @@
-using Ghost.Core.Data;
+using Ghost.Data;
 using Microsoft.Extensions.Logging;
 using System.Runtime.CompilerServices;
 
-namespace Ghost.Core.Logging;
+namespace Ghost.Logging;
 
 /// <summary>
 /// Interface for Ghost logger implementations, extending the standard ILogger
@@ -30,4 +30,5 @@ public interface IGhostLogger : ILogger
   /// </summary>
   /// <param name="cache">New cache instance</param>
   void SetCache(ICache cache);
+  void SetLogLevel(LogLevel initialLogLevel);
 }

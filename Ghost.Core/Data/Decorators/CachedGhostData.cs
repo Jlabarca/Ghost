@@ -1,9 +1,10 @@
+using Ghost.Config;
+using Ghost.Logging;
 using System.Collections.Concurrent;
-using Ghost.Core.Configuration;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 
-namespace Ghost.Core.Data;
+namespace Ghost.Data;
 
 /// <summary>
 /// Decorator that adds multi-level caching to any IGhostData implementation.
@@ -13,8 +14,8 @@ public class CachedGhostData : IGhostData
 {
   private readonly IGhostData _inner;
   private readonly ICache _memoryCache;
-  private readonly IOptions<CachingConfiguration> _config;
-  private readonly ILogger<CachedGhostData> _logger;
+  private readonly IOptions<CachingDataConfig> _config;
+  private readonly IGhostLogger _logger;
   private readonly ConcurrentDictionary<string, SemaphoreSlim> _locks = new();
 
   private bool _disposed;
@@ -29,8 +30,8 @@ public class CachedGhostData : IGhostData
   public CachedGhostData(
       IGhostData inner,
       ICache memoryCache,
-      IOptions<CachingConfiguration> config,
-      ILogger<CachedGhostData> logger)
+      IOptions<CachingDataConfig> config,
+      IGhostLogger logger)
   {
     _inner = inner ?? throw new ArgumentNullException(nameof(inner));
     _memoryCache = memoryCache ?? throw new ArgumentNullException(nameof(memoryCache));

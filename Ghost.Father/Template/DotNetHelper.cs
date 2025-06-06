@@ -1,5 +1,5 @@
 // src/Ghost/Templates/DotNetHelper.cs
-using Ghost.Core.Exceptions;
+using Ghost.Exceptions;
 using Scriban;
 using System.Diagnostics;
 using System.Text.RegularExpressions;

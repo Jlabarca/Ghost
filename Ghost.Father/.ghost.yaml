@@ -1,0 +1,228 @@
+# Base Ghost Application Configuration
+# This file contains common settings shared by all Ghost applications
+# Specific apps can override these values in their own config files
+
+app:
+  id: "ghost-base"
+  name: "Ghost Application"
+  description: "Base configuration for Ghost applications"
+  version: "1.0.0"
+
+core:
+  mode: "development" # Default to development mode
+  logsPath: "logs" # Default logs directory
+  logLevel: "Information" # Default log level
+  dataPath: "data" # Default data directory
+  appsPath: "apps" # Default applications directory
+  listenPort: 5000 # Default port (will be overridden by specific apps)
+  healthCheckInterval: "00:01:00" # 1 minute health checks
+  metricsInterval: "00:00:30" # 30 seconds metrics collection
+  maxRetries: 3 # Default retry count for operations
+  retryDelay: "00:00:05" # 5 seconds retry delay
+
+  # Common settings for all Ghost applications
+  settings:
+    autoGhostFather: "false" # Most apps don't auto-connect to GhostFather
+    autoMonitor: "false" # Most apps don't need auto-monitoring
+    isService: "false" # Most apps are not background services
+
+    # Common development settings
+    colorOutput: "auto" # Colored console output
+    verboseOutput: "false" # Verbose mode off by default
+    interactiveMode: "true" # Interactive prompts enabled
+
+    # Performance settings
+    parallelOperations: "true" # Enable parallel operations
+    maxConcurrentOperations: "4" # Reasonable default concurrency
+
+# --- Data Layer Defaults ---
+# Conservative defaults that work for most applications
+
+redis:
+  enabled: false # Disabled by default - apps can enable if needed
+  connectionString: "localhost:6379" # Standard Redis connection
+  database: 0 # Default Redis database
+  useSsl: false # No SSL for local development
+  connectRetry: 3 # Reasonable retry count
+  connectTimeout: "00:00:05" # 5 seconds connection timeout
+  syncTimeout: "00:00:05" # 5 seconds sync timeout
+  commandTimeout: "00:00:10" # 10 seconds command timeout
+  keyPrefix: "ghost:" # Default key prefix
+
+postgres:
+  enabled: false # Disabled by default to avoid setup requirements
+  connectionString: "" # Empty by default - must be set by specific apps
+  maxPoolSize: 20 # Conservative pool size
+  minPoolSize: 2 # Minimum connections
+  prewarmConnections: false # Don't prewarm by default
+  connectionLifetime: "00:30:00" # 30 minutes connection lifetime
+  connectionIdleLifetime: "00:05:00" # 5 minutes idle timeout
+  commandTimeout: 30 # 30 seconds command timeout
+  enableParameterLogging: false # No parameter logging by default (security)
+  schema: "public" # Default PostgreSQL schema
+  enablePooling: true # Enable connection pooling
+
+caching:
+  # Lightweight caching suitable for most applications
+  useL1Cache: true # In-memory cache enabled
+  useL2Cache: false # Distributed cache disabled by default
+
+  # Conservative expiration times
+  defaultExpiration: "00:05:00" # 5 minutes default
+  defaultL1SlidingExpiration: "00:02:00" # 2 minutes sliding
+  defaultL1Expiration: "00:05:00" # 5 minutes absolute
+  defaultL2Expiration: "00:30:00" # 30 minutes for L2 if enabled
+
+  # Reasonable cache size limits
+  maxL1CacheItems: 5000 # 5K items maximum
+  maxL1CacheSizeBytes: 52428800 # 50MB maximum size
+
+  # Cache storage settings
+  cachePath: "cache" # Default cache directory
+  compressItems: false # No compression by default
+  compressionThreshold: 2048 # 2KB compression threshold
+
+resilience:
+  # Basic resilience settings suitable for most applications
+  enableRetry: true # Enable retries
+  retryCount: 3 # 3 retry attempts
+  retryBaseDelayMs: 200 # 200ms base delay
+  enableCircuitBreaker: false # Circuit breaker disabled by default
+  circuitBreakerThreshold: 5 # 5 failures to open circuit
+  circuitBreakerDurationMs: 30000 # 30 seconds circuit open duration
+  timeoutMs: 30000 # 30 seconds default timeout
+  enableBulkhead: false # Bulkhead disabled by default
+
+security:
+  # Basic security settings
+  enableEncryption: false # No encryption by default
+  enableAudit: false # No audit logging by default
+  auditLogPath: "logs/audit" # Audit log location if enabled
+  auditLogRetentionDays: 30 # 30 days audit retention
+
+  # File system security
+  restrictFileAccess: false # No restrictions by default
+  allowShellExecution: false # No shell execution by default
+
+observability:
+  # Basic observability suitable for development
+  logLevel: "Information" # Information level logging
+  enableConsoleLogging: true # Console logging enabled
+  enableFileLogging: false # File logging disabled by default
+  enableStructuredLogging: false # Simple text logging by default
+
+  # Minimal metrics and monitoring
+  enableMetrics: false # Metrics disabled by default
+  enableTracing: false # Tracing disabled by default
+  enableHealthChecks: false # Health checks disabled by default
+
+  # Log management
+  logsPath: "logs" # Default logs directory
+  logRetentionDays: 7 # 7 days log retention
+  maxLogFileSizeMB: 10 # 10MB max log file size
+  maxLogFiles: 5 # Keep 5 log files maximum
+
+  # Performance monitoring
+  enablePerformanceCounters: false # Disabled by default
+  enableMemoryMonitoring: false # Disabled by default
+  enableCpuMonitoring: false # Disabled by default
+
+  # Metrics settings (if enabled)
+  metricsIntervalSeconds: 60 # 1 minute metrics interval
+  healthCheckIntervalSeconds: 120 # 2 minutes health check interval
+  tracingSamplingRate: 0.1 # 10% tracing sample rate
+
+# --- Common Module Configurations ---
+# Modules that might be useful across different Ghost applications
+
+modules:
+  # Configuration management
+  configManager:
+    enabled: false # Disabled by default
+    autoReload: false # No auto-reload by default
+    reloadInterval: "00:01:00" # 1 minute reload check
+
+  # Basic file watching (useful for development)
+  fileWatcher:
+    enabled: false # Disabled by default
+    watchPaths: [] # No paths watched by default
+    watchIgnore: # Common ignore patterns
+      - "*.log"
+      - "*.tmp"
+      - "**/node_modules/**"
+      - "**/bin/**"
+      - "**/obj/**"
+      - "**/.git/**"
+
+  # Event system (basic)
+  eventSystem:
+    enabled: false # Disabled by default
+    eventBusType: "InMemory" # In-memory events by default
+    maxEventAge: "00:10:00" # 10 minutes max event age
+    maxQueueSize: 1000 # 1K events max in queue
+
+  # Basic notification system
+  notifications:
+    enabled: false # Disabled by default
+    enableConsoleNotifications: true # Console notifications if enabled
+    enableFileNotifications: false # File notifications disabled
+    notificationLevel: "Warning" # Warning level and above
+
+  # Plugin system (basic)
+  plugins:
+    enabled: false # Disabled by default
+    pluginPaths: # Common plugin locations
+      - "./plugins"
+      - "~/.ghost/plugins"
+    autoLoadPlugins: false # No auto-loading by default
+    enablePluginSandbox: true # Sandbox enabled for security
+
+  # Development helpers
+  development:
+    enabled: false # Disabled by default
+    enableHotReload: false # No hot reload by default
+    hotReloadPort: 0 # No specific port
+    enableAutoSave: false # No auto-save by default
+    enableAutoFormat: false # No auto-format by default
+
+  # Integration helpers
+  integrations:
+    enabled: false # Disabled by default
+    enableGitIntegration: false # Git integration disabled
+    enableDockerIntegration: false # Docker integration disabled
+    enableKubernetesIntegration: false # K8s integration disabled
+
+# --- Environment-Specific Overrides ---
+# These can be overridden by environment-specific configs
+
+environments:
+  development:
+    core:
+      logLevel: "Debug" # More verbose logging in development
+    observability:
+      enableFileLogging: true # Enable file logging in development
+      enableMetrics: true # Enable metrics in development
+    modules:
+      development:
+        enabled: true # Enable development helpers
+        enableHotReload: true # Enable hot reload in development
+
+  production:
+    core:
+      mode: "production"
+      logLevel: "Warning" # Less verbose logging in production
+    security:
+      enableAudit: true # Enable audit logging in production
+      restrictFileAccess: true # Restrict file access in production
+    observability:
+      enableFileLogging: true # Enable file logging in production
+      enableMetrics: true # Enable metrics in production
+      enableHealthChecks: true # Enable health checks in production
+      logRetentionDays: 30 # Longer retention in production
+
+  testing:
+    core:
+      logLevel: "Error" # Minimal logging during tests
+    observability:
+      enableConsoleLogging: false # No console spam during tests
+      enableMetrics: false # No

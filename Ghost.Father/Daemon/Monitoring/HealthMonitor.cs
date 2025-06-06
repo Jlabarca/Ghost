@@ -1,5 +1,5 @@
-using Ghost.Core;
-using Ghost.Core.Storage;
+using Ghost;
+using Ghost.Storage;
 using Ghost.Father.Models;
 using System.Collections.Concurrent;
 using System.Diagnostics;

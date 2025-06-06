@@ -1,4 +1,4 @@
-using Ghost.Core;
+using Ghost;
 using MemoryPack;
 namespace Ghost;
 

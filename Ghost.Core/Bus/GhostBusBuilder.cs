@@ -1,6 +1,6 @@
-// using Ghost.Core.Storage;
+// using Ghost.Storage;
 // using IGhostBus = Ghost.Core.Messaging.IGhostBus;
-// namespace Ghost.Core.Bus;
+// namespace Ghost.Bus;
 //
 // // Builder pattern for easier configuration
 // public class GhostBusBuilder

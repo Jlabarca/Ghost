@@ -1,14 +1,11 @@
-using System;
-using System.Data;
-using System.Threading;
-using System.Threading.Tasks;
-using Ghost.Core.Configuration;
+using Ghost.Config;
+using Ghost.Logging;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Npgsql;
 using StackExchange.Redis;
 
-namespace Ghost.Core.Pooling
+namespace Ghost.Pooling
 {
     /// <summary>
     /// Manages database connection pools for Ghost applications.
@@ -16,29 +13,29 @@ namespace Ghost.Core.Pooling
     /// </summary>
     public sealed class ConnectionPoolManager : IAsyncDisposable
     {
-        private readonly ILogger<ConnectionPoolManager> _logger;
-        private readonly GhostConfiguration _config;
-        
+        private readonly IGhostLogger _logger;
+        private readonly GhostConfig _config;
+
         private readonly Lazy<ConnectionMultiplexer> _redisConnectionLazy;
         private readonly Lazy<NpgsqlDataSource> _postgresDataSourceLazy;
-        
+
         private readonly SemaphoreSlim _redisSemaphore = new(1, 1);
         private readonly SemaphoreSlim _postgresSemaphore = new(1, 1);
-        
+
         private bool _disposed;
-        
+
         /// <summary>
         /// Initializes a new instance of the <see cref="ConnectionPoolManager"/> class.
         /// </summary>
         /// <param name="logger">The logger.</param>
         /// <param name="config">The configuration options.</param>
         public ConnectionPoolManager(
-            ILogger<ConnectionPoolManager> logger,
-            IOptions<GhostConfiguration> config)
+            IGhostLogger logger,
+            GhostConfig config)
         {
             _logger = logger ?? throw new ArgumentNullException(nameof(logger));
-            _config = config?.Value ?? throw new ArgumentNullException(nameof(config));
-            
+            _config = config ?? throw new ArgumentNullException(nameof(config));
+
             // Initialize Redis connection lazily
             _redisConnectionLazy = new Lazy<ConnectionMultiplexer>(() =>
             {
@@ -48,21 +45,21 @@ namespace Ghost.Core.Pooling
                 connectionOptions.ConnectRetry = _config.Redis.ConnectRetry;
                 connectionOptions.ConnectTimeout = (int)_config.Redis.ConnectTimeout.TotalMilliseconds;
                 connectionOptions.SyncTimeout = (int)_config.Redis.SyncTimeout.TotalMilliseconds;
-                
+
                 var connection = ConnectionMultiplexer.Connect(connectionOptions);
                 connection.ConnectionFailed += (sender, args) =>
                 {
-                    _logger.LogError("Redis connection failed: {EndPoint}, {FailureType}", 
+                    _logger.LogError("Redis connection failed: {EndPoint}, {FailureType}",
                         args.EndPoint, args.FailureType);
                 };
                 connection.ConnectionRestored += (sender, args) =>
                 {
                     _logger.LogInformation("Redis connection restored: {EndPoint}", args.EndPoint);
                 };
-                
+
                 return connection;
             });
-            
+
             // Initialize PostgreSQL connection pool lazily
             _postgresDataSourceLazy = new Lazy<NpgsqlDataSource>(() =>
             {
@@ -107,7 +104,7 @@ namespace Ghost.Core.Pooling
                 return dataSource;
             });
         }
-        
+
         /// <summary>
         /// Gets a Redis database instance from the connection pooG.
         /// </summary>
@@ -116,7 +113,7 @@ namespace Ghost.Core.Pooling
         public async Task<IDatabase> GetRedisDatabaseAsync(int db = -1)
         {
             if (_disposed) throw new ObjectDisposedException(nameof(ConnectionPoolManager));
-            
+
             await _redisSemaphore.WaitAsync();
             try
             {
@@ -127,7 +124,7 @@ namespace Ghost.Core.Pooling
                 _redisSemaphore.Release();
             }
         }
-        
+
         /// <summary>
         /// Gets a Redis subscriber instance from the connection pooG.
         /// </summary>
@@ -135,7 +132,7 @@ namespace Ghost.Core.Pooling
         public async Task<ISubscriber> GetRedisSubscriberAsync()
         {
             if (_disposed) throw new ObjectDisposedException(nameof(ConnectionPoolManager));
-            
+
             await _redisSemaphore.WaitAsync();
             try
             {
@@ -146,7 +143,7 @@ namespace Ghost.Core.Pooling
                 _redisSemaphore.Release();
             }
         }
-        
+
         /// <summary>
         /// Gets a PostgreSQL connection from the connection pooG.
         /// </summary>
@@ -155,7 +152,7 @@ namespace Ghost.Core.Pooling
         public async Task<NpgsqlConnection> GetPostgresConnectionAsync(CancellationToken ct = default)
         {
             if (_disposed) throw new ObjectDisposedException(nameof(ConnectionPoolManager));
-            
+
             await _postgresSemaphore.WaitAsync(ct);
             try
             {
@@ -168,7 +165,7 @@ namespace Ghost.Core.Pooling
                 _postgresSemaphore.Release();
             }
         }
-        
+
         /// <summary>
         /// Gets the PostgreSQL data source.
         /// </summary>
@@ -178,7 +175,7 @@ namespace Ghost.Core.Pooling
             if (_disposed) throw new ObjectDisposedException(nameof(ConnectionPoolManager));
             return _postgresDataSourceLazy.Value;
         }
-        
+
         /// <summary>
         /// Prewarms the PostgreSQL connection pool by opening connections.
         /// </summary>
@@ -188,20 +185,20 @@ namespace Ghost.Core.Pooling
             var connections = new NpgsqlConnection[_config.Postgres.MinPoolSize];
             try
             {
-                _logger.LogInformation("Prewarming PostgreSQL connection pool with {Count} connections", 
+                _logger.LogInformation("Prewarming PostgreSQL connection pool with {Count} connections",
                     _config.Postgres.MinPoolSize);
-                
+
                 for (var i = 0; i < _config.Postgres.MinPoolSize; i++)
                 {
                     connections[i] = dataSource.CreateConnection();
                     await connections[i].OpenAsync();
-                    
+
                     // Execute a simple query to ensure the connection is fully initialized
                     using var cmd = connections[i].CreateCommand();
                     cmd.CommandText = "SELECT 1";
                     await cmd.ExecuteScalarAsync();
                 }
-                
+
                 _logger.LogInformation("PostgreSQL connection pool prewarmed successfully");
             }
             catch (Exception ex)
@@ -221,7 +218,7 @@ namespace Ghost.Core.Pooling
                 }
             }
         }
-        
+
         /// <summary>
         /// Disposes the connection pool manager.
         /// </summary>
@@ -229,9 +226,9 @@ namespace Ghost.Core.Pooling
         {
             if (_disposed)
                 return;
-            
+
             _disposed = true;
-            
+
             if (_redisConnectionLazy.IsValueCreated)
             {
                 try
@@ -244,7 +241,7 @@ namespace Ghost.Core.Pooling
                     _logger.LogError(ex, "Error disposing Redis connection");
                 }
             }
-            
+
             if (_postgresDataSourceLazy.IsValueCreated)
             {
                 try
@@ -257,51 +254,51 @@ namespace Ghost.Core.Pooling
                     _logger.LogError(ex, "Error disposing PostgreSQL data source");
                 }
             }
-            
+
             _redisSemaphore.Dispose();
             _postgresSemaphore.Dispose();
         }
-        
+
         /// <summary>
         /// A custom database logger provider.
         /// </summary>
         private class DbLoggerProvider : ILoggerProvider
         {
             private readonly ILogger _parentLogger;
-            
+
             public DbLoggerProvider(ILogger parentLogger)
             {
                 _parentLogger = parentLogger;
             }
-            
+
             public ILogger CreateLogger(string categoryName)
             {
                 return new DbLogger(_parentLogger);
             }
-            
+
             public void Dispose()
             {
             }
-            
+
             private class DbLogger : ILogger
             {
                 private readonly ILogger _parentLogger;
-                
+
                 public DbLogger(ILogger parentLogger)
                 {
                     _parentLogger = parentLogger;
                 }
-                
+
                 public IDisposable? BeginScope<TState>(TState state) where TState : notnull
                 {
                     return null;
                 }
-                
+
                 public bool IsEnabled(LogLevel logLevel)
                 {
                     return _parentLogger.IsEnabled(logLevel);
                 }
-                
+
                 public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter)
                 {
                     _parentLogger.Log(logLevel, eventId, state, exception, formatter);

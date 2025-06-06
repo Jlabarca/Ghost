@@ -1,5 +1,5 @@
-using Ghost.Core.Config;
-using Ghost.Core.Exceptions;
+using Ghost.Config;
+using Ghost.Exceptions;
 using Spectre.Console;
 using Spectre.Console.Cli;
 using System.ComponentModel;
@@ -15,18 +15,14 @@ namespace Ghost.Father.CLI.Commands;
 /// </summary>
 public class InstallCommand : AsyncCommand<InstallCommand.Settings>
 {
-    private readonly GhostConfig _config;
     private readonly InstallationService _installationService;
     private readonly TemplateManager _templateManager;
     private readonly EnvironmentSetup _environmentSetup;
     private readonly ProcessManager _processManager;
     private readonly SdkBuildService _sdkBuildService;
 
-
     public InstallCommand(IServiceProvider services)
     {
-        _config = services.GetService<GhostConfig>() ??
-                  throw new ArgumentNullException(nameof(GhostConfig), "GhostConfig is not registered");
         _templateManager = services.GetService<TemplateManager>() ??
                            throw new ArgumentNullException(nameof(TemplateManager), "TemplateManager is not registered");
         // _processManager = services.GetService<ProcessManager>() ??

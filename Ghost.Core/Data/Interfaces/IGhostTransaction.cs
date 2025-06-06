@@ -1,5 +1,5 @@
 
-namespace Ghost.Core.Data
+namespace Ghost.Data
 {
   /// <summary>
   /// Represents a database transaction that can be committed or rolled back.

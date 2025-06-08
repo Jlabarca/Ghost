@@ -1,7 +1,7 @@
 namespace Ghost.Data;
 
 /// <summary>
-/// Information about a database index
+///     Information about a database index
 /// </summary>
 public class IndexInfo
 {

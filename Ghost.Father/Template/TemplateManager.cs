@@ -1,8 +1,7 @@
 using System.Diagnostics;
-using Ghost.Exceptions;
 using System.Text.Json;
+using Ghost.Exceptions;
 using Spectre.Console;
-
 namespace Ghost.Templates;
 
 public class TemplateManager
@@ -20,15 +19,18 @@ public class TemplateManager
     private void LoadTemplates()
     {
         _templates = new Dictionary<string, TemplateInfo>();
-        var templateDirs = Directory.GetDirectories(_templatesPath);
+        string[]? templateDirs = Directory.GetDirectories(_templatesPath);
 
-        foreach (var templateDir in templateDirs)
+        foreach (string? templateDir in templateDirs)
         {
-            var templateJsonPath = Path.Combine(templateDir, "template.json");
-            if (!File.Exists(templateJsonPath)) continue;
+            string? templateJsonPath = Path.Combine(templateDir, "template.json");
+            if (!File.Exists(templateJsonPath))
+            {
+                continue;
+            }
 
-            var templateJson = File.ReadAllText(templateJsonPath);
-            var template = JsonSerializer.Deserialize<TemplateInfo>(templateJson);
+            string? templateJson = File.ReadAllText(templateJsonPath);
+            TemplateInfo? template = JsonSerializer.Deserialize<TemplateInfo>(templateJson);
 
             if (template != null)
             {
@@ -40,14 +42,14 @@ public class TemplateManager
 
     public async Task<DirectoryInfo> CreateFromTemplateAsync(string templateName, string projectName, string outputPath)
     {
-        if (!_templates.TryGetValue(templateName, out var template))
+        if (!_templates.TryGetValue(templateName, out TemplateInfo? template))
         {
             throw new GhostException($"Template '{templateName}' not found", ErrorCode.TemplateNotFound);
         }
 
         // Create project directory
-        var projectDir = Directory.CreateDirectory(Path.Combine(outputPath, projectName));
-        var templateFilesPath = Path.Combine(template.TemplateRoot, "files");
+        DirectoryInfo? projectDir = Directory.CreateDirectory(Path.Combine(outputPath, projectName));
+        string? templateFilesPath = Path.Combine(template.TemplateRoot, "files");
 
         if (!Directory.Exists(templateFilesPath))
         {
@@ -61,13 +63,13 @@ public class TemplateManager
     }
 
     private async Task ProcessTemplateFilesAsync(string sourcePath, string targetPath, string projectName,
-        TemplateInfo template)
+            TemplateInfo template)
     {
-        foreach (var file in Directory.GetFiles(sourcePath, "*.*", SearchOption.AllDirectories))
+        foreach (string? file in Directory.GetFiles(sourcePath, "*.*", SearchOption.AllDirectories))
         {
-            var relativePath = Path.GetRelativePath(sourcePath, file);
-            var processedPath = ProcessTemplateString(relativePath, projectName, template);
-            var targetFilePath = Path.Combine(targetPath, processedPath);
+            string? relativePath = Path.GetRelativePath(sourcePath, file);
+            string? processedPath = ProcessTemplateString(relativePath, projectName, template);
+            string? targetFilePath = Path.Combine(targetPath, processedPath);
 
             // Create target directory if it doesn't exist
             Directory.CreateDirectory(Path.GetDirectoryName(targetFilePath));
@@ -75,8 +77,8 @@ public class TemplateManager
             // Process file content if it's a template
             if (file.EndsWith(".tpl"))
             {
-                var content = await File.ReadAllTextAsync(file);
-                var processedContent = ProcessTemplateString(content, projectName, template);
+                string? content = await File.ReadAllTextAsync(file);
+                string? processedContent = ProcessTemplateString(content, projectName, template);
                 targetFilePath = targetFilePath[..^4]; // Remove .tpl extension
                 await File.WriteAllTextAsync(targetFilePath, processedContent);
             }
@@ -92,12 +94,12 @@ public class TemplateManager
         // Initialize variables dictionary with base values
         var variables = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
         {
-            ["project_name"] = projectName,
-            ["safe_name"] = MakeSafeName(projectName)
+                ["project_name"] = projectName,
+                ["safe_name"] = MakeSafeName(projectName)
         };
 
         // Add template variables without processing them
-        foreach (var (key, value) in template.Variables)
+        foreach ((string? key, string? value) in template.Variables)
         {
             if (!variables.ContainsKey(key))
             {
@@ -106,18 +108,18 @@ public class TemplateManager
         }
 
         // Process all template variables in one pass
-        var result = input;
+        string? result = input;
         bool madeChange;
         int maxIterations = 10; // Prevent infinite loops
 
         do
         {
             madeChange = false;
-            var currentResult = result;
+            string? currentResult = result;
 
-            foreach (var (key, value) in variables)
+            foreach ((string? key, string? value) in variables)
             {
-                var placeholder = $"{{{{ {key} }}}}";
+                string? placeholder = $"{{{{ {key} }}}}";
                 if (currentResult.Contains(placeholder))
                 {
                     currentResult = currentResult.Replace(placeholder, value);
@@ -140,16 +142,23 @@ public class TemplateManager
     private static string MakeSafeName(string name)
     {
         if (string.IsNullOrEmpty(name))
+        {
             return "GhostApp";
+        }
 
         // Convert to PascalCase and remove invalid characters
-        var words = name.Split(new[] { ' ', '-', '_', '.', '/', '\\' }, StringSplitOptions.RemoveEmptyEntries);
+        string[]? words = name.Split(new[]
+        {
+                ' ', '-',
+                '_', '.',
+                '/', '\\'
+        }, StringSplitOptions.RemoveEmptyEntries);
 
-        var safeName = string.Join("", words.Select(word =>
-            string.Concat(
-                char.ToUpper(word[0]),
-                word.Length > 1 ? word[1..].ToLower() : ""
-            )
+        string? safeName = string.Join("", words.Select(word =>
+                string.Concat(
+                        char.ToUpper(word[0]),
+                        word.Length > 1 ? word[1..].ToLower() : ""
+                )
         ));
 
         // Ensure it starts with a letter
@@ -174,7 +183,7 @@ public class TemplateManager
     public async Task InstallTemplatesAsync(string targetTemplatesDir, bool force, StatusContext ctx)
     {
         // Find the Template directory
-        var sourceTemplatesPath = FindTemplatesDirectory();
+        string? sourceTemplatesPath = FindTemplatesDirectory();
 
         if (sourceTemplatesPath == null)
         {
@@ -183,8 +192,8 @@ public class TemplateManager
         }
 
         // Check if source and target are the same to avoid copying to itself
-        var normalizedSource = Path.GetFullPath(sourceTemplatesPath).TrimEnd(Path.DirectorySeparatorChar);
-        var normalizedTarget = Path.GetFullPath(targetTemplatesDir).TrimEnd(Path.DirectorySeparatorChar);
+        string? normalizedSource = Path.GetFullPath(sourceTemplatesPath).TrimEnd(Path.DirectorySeparatorChar);
+        string? normalizedTarget = Path.GetFullPath(targetTemplatesDir).TrimEnd(Path.DirectorySeparatorChar);
 
         if (string.Equals(normalizedSource, normalizedTarget, StringComparison.OrdinalIgnoreCase))
         {
@@ -200,18 +209,18 @@ public class TemplateManager
     }
 
     /// <summary>
-    /// Finds the templates directory in various standard locations
+    ///     Finds the templates directory in various standard locations
     /// </summary>
     private string FindTemplatesDirectory()
     {
-        var executablePath = Process.GetCurrentProcess().MainModule?.FileName;
+        string? executablePath = Process.GetCurrentProcess().MainModule?.FileName;
         if (executablePath == null)
         {
             G.LogError("Could not determine executable path");
             return null;
         }
 
-        var sourceDir = Path.GetDirectoryName(executablePath);
+        string? sourceDir = Path.GetDirectoryName(executablePath);
         if (sourceDir == null)
         {
             G.LogError("Could not determine source directory");
@@ -219,24 +228,23 @@ public class TemplateManager
         }
 
         // Look for Template directory in various locations
-        var possibleTemplatePaths = new[]
+        string[]? possibleTemplatePaths = new[]
         {
-            // Direct Path to Ghost.Father/Template
-            Path.Combine(sourceDir, "..", "..", "..", "Ghost.Father", "Template"),
-            // For development environment
-            Path.Combine(sourceDir, "..", "..", "..", "Template"),
-            // If executable is in bin/Debug/net9.0
-            Path.Combine(sourceDir, "..", "..", "..", "..", "Template"),
-            // Fallback to old paths
-            Path.Combine(sourceDir, "Template"),
-            Path.Combine(sourceDir, "Templates")
+                // Direct Path to Ghost.Father/Template
+                Path.Combine(sourceDir, "..", "..", "..", "Ghost.Father", "Template"),
+                // For development environment
+                Path.Combine(sourceDir, "..", "..", "..", "Template"),
+                // If executable is in bin/Debug/net9.0
+                Path.Combine(sourceDir, "..", "..", "..", "..", "Template"),
+                // Fallback to old paths
+                Path.Combine(sourceDir, "Template"), Path.Combine(sourceDir, "Templates")
         };
 
-        foreach (var path in possibleTemplatePaths)
+        foreach (string? path in possibleTemplatePaths)
         {
             try
             {
-                var fullPath = Path.GetFullPath(path);
+                string? fullPath = Path.GetFullPath(path);
                 G.LogInfo($"Checking for templates directory: {fullPath}");
 
                 if (Directory.Exists(fullPath))
@@ -255,12 +263,12 @@ public class TemplateManager
     }
 
     /// <summary>
-    /// Copies templates from source to target directory
+    ///     Copies templates from source to target directory
     /// </summary>
     private async Task CopyTemplatesAsync(string sourcePath, string targetPath, bool force, StatusContext ctx)
     {
         // Check if there are subdirectories that represent individual templates
-        var templateFolders = Directory.GetDirectories(sourcePath);
+        string[]? templateFolders = Directory.GetDirectories(sourcePath);
 
         if (templateFolders.Length > 0)
         {
@@ -268,19 +276,19 @@ public class TemplateManager
             G.LogInfo($"Found {templateFolders.Length} templates to install");
 
             // Copy each template folder
-            foreach (var templateFolder in templateFolders)
+            foreach (string? templateFolder in templateFolders)
             {
-                var templateName = Path.GetFileName(templateFolder);
+                string? templateName = Path.GetFileName(templateFolder);
                 ctx.Status($"Installing template: {templateName}...");
-                var targetFolder = Path.Combine(targetPath, templateName);
+                string? targetFolder = Path.Combine(targetPath, templateName);
 
                 // Check if template already exists
                 bool shouldCopy = true;
                 if (Directory.Exists(targetFolder) && !force)
                 {
-                    var replaceTemplate = AnsiConsole.Confirm(
-                        $"Template '{templateName}' already exists. Replace it?",
-                        false);
+                    bool replaceTemplate = AnsiConsole.Confirm(
+                            $"Template '{templateName}' already exists. Replace it?",
+                            false);
                     if (!replaceTemplate)
                     {
                         ctx.Status($"Skipping existing template: {templateName}");
@@ -314,7 +322,7 @@ public class TemplateManager
             // If there are no subdirectories, copy the entire Template folder content
             G.LogInfo("Copying entire Template directory content");
 
-            var files = Directory.GetFiles(sourcePath, "*", SearchOption.AllDirectories);
+            string[]? files = Directory.GetFiles(sourcePath, "*", SearchOption.AllDirectories);
             if (files.Length > 0)
             {
                 // Copy all files and directories
@@ -329,7 +337,7 @@ public class TemplateManager
     }
 
     /// <summary>
-    /// Recursively copies a directory and its contents
+    ///     Recursively copies a directory and its contents
     /// </summary>
     private async Task CopyDirectoryAsync(string sourceDir, string targetDir)
     {
@@ -337,22 +345,22 @@ public class TemplateManager
         Directory.CreateDirectory(targetDir);
 
         // Copy all files
-        foreach (var file in Directory.GetFiles(sourceDir))
+        foreach (string? file in Directory.GetFiles(sourceDir))
         {
-            var targetFile = Path.Combine(targetDir, Path.GetFileName(file));
+            string? targetFile = Path.Combine(targetDir, Path.GetFileName(file));
             await CopyFileAsync(file, targetFile);
         }
 
         // Copy all subdirectories recursively
-        foreach (var dir in Directory.GetDirectories(sourceDir))
+        foreach (string? dir in Directory.GetDirectories(sourceDir))
         {
-            var targetSubDir = Path.Combine(targetDir, Path.GetFileName(dir));
+            string? targetSubDir = Path.Combine(targetDir, Path.GetFileName(dir));
             await CopyDirectoryAsync(dir, targetSubDir);
         }
     }
 
     /// <summary>
-    /// Copies a file with retry logic
+    ///     Copies a file with retry logic
     /// </summary>
     private async Task CopyFileAsync(string sourcePath, string targetPath)
     {

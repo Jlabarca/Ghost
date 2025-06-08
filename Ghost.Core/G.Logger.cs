@@ -1,8 +1,7 @@
-using Microsoft.Extensions.Logging;
 using System.Runtime.CompilerServices;
 using Ghost.Data;
 using Ghost.Logging;
-
+using Microsoft.Extensions.Logging;
 namespace Ghost;
 
 public static class G
@@ -26,11 +25,11 @@ public static class G
     }
 
     private static void Log(
-        string message,
-        LogLevel level = LogLevel.Information,
-        Exception? ex = null,
-        [CallerFilePath] string sourceFilePath = "",
-        [CallerLineNumber] int sourceLineNumber = 0)
+            string message,
+            LogLevel level = LogLevel.Information,
+            Exception? ex = null,
+            [CallerFilePath] string sourceFilePath = "",
+            [CallerLineNumber] int sourceLineNumber = 0)
     {
         if (!EnsureInitialized())
         {
@@ -42,91 +41,105 @@ public static class G
     }
 
     public static void LogInfo(
-        string message,
-        [CallerFilePath] string sourceFilePath = "",
-        [CallerLineNumber] int sourceLineNumber = 0)
-        => Log(message, LogLevel.Information, null, sourceFilePath, sourceLineNumber);
+            string message,
+            [CallerFilePath] string sourceFilePath = "",
+            [CallerLineNumber] int sourceLineNumber = 0)
+    {
+        Log(message, LogLevel.Information, null, sourceFilePath, sourceLineNumber);
+    }
 
     public static void LogDebug(
-        string message,
-        [CallerFilePath] string sourceFilePath = "",
-        [CallerLineNumber] int sourceLineNumber = 0)
-        => Log(message, LogLevel.Debug, null, sourceFilePath, sourceLineNumber);
+            string message,
+            [CallerFilePath] string sourceFilePath = "",
+            [CallerLineNumber] int sourceLineNumber = 0)
+    {
+        Log(message, LogLevel.Debug, null, sourceFilePath, sourceLineNumber);
+    }
 
     public static void LogWarn(
-        string message,
-        [CallerFilePath] string sourceFilePath = "",
-        [CallerLineNumber] int sourceLineNumber = 0)
-        => Log(message, LogLevel.Warning, null, sourceFilePath, sourceLineNumber);
+            string message,
+            [CallerFilePath] string sourceFilePath = "",
+            [CallerLineNumber] int sourceLineNumber = 0)
+    {
+        Log(message, LogLevel.Warning, null, sourceFilePath, sourceLineNumber);
+    }
 
     public static void LogError(
-        string message,
-        Exception? ex = null,
-        [CallerFilePath] string sourceFilePath = "",
-        [CallerLineNumber] int sourceLineNumber = 0)
-        => Log(message, LogLevel.Error, ex, sourceFilePath, sourceLineNumber);
+            string message,
+            Exception? ex = null,
+            [CallerFilePath] string sourceFilePath = "",
+            [CallerLineNumber] int sourceLineNumber = 0)
+    {
+        Log(message, LogLevel.Error, ex, sourceFilePath, sourceLineNumber);
+    }
 
     public static void LogError(
-        Exception? ex,
-        [CallerFilePath] string sourceFilePath = "",
-        [CallerLineNumber] int sourceLineNumber = 0)
-        => LogError(ex?.Message ?? "Unknown error", ex, sourceFilePath, sourceLineNumber);
+            Exception? ex,
+            [CallerFilePath] string sourceFilePath = "",
+            [CallerLineNumber] int sourceLineNumber = 0)
+    {
+        LogError(ex?.Message ?? "Unknown error", ex, sourceFilePath, sourceLineNumber);
+    }
 
     public static void LogCritical(
-        string message,
-        Exception? ex = null,
-        [CallerFilePath] string sourceFilePath = "",
-        [CallerLineNumber] int sourceLineNumber = 0)
-        => Log(message, LogLevel.Critical, ex, sourceFilePath, sourceLineNumber);
+            string message,
+            Exception? ex = null,
+            [CallerFilePath] string sourceFilePath = "",
+            [CallerLineNumber] int sourceLineNumber = 0)
+    {
+        Log(message, LogLevel.Critical, ex, sourceFilePath, sourceLineNumber);
+    }
 
     public static void LogCritical(
-        Exception? ex,
-        [CallerFilePath] string sourceFilePath = "",
-        [CallerLineNumber] int sourceLineNumber = 0)
-        => LogCritical(ex?.Message ?? "Unknown error", ex, sourceFilePath, sourceLineNumber);
+            Exception? ex,
+            [CallerFilePath] string sourceFilePath = "",
+            [CallerLineNumber] int sourceLineNumber = 0)
+    {
+        LogCritical(ex?.Message ?? "Unknown error", ex, sourceFilePath, sourceLineNumber);
+    }
 
     public static void LogInfo(
-        string message,
-        [CallerFilePath] string sourceFilePath = "",
-        [CallerLineNumber] int sourceLineNumber = 0,
-        params object[] args)
+            string message,
+            [CallerFilePath] string sourceFilePath = "",
+            [CallerLineNumber] int sourceLineNumber = 0,
+            params object[] args)
     {
         LogInfo(string.Format(message, args), sourceFilePath, sourceLineNumber);
     }
 
     public static void LogDebug(
-        string message,
-        [CallerFilePath] string sourceFilePath = "",
-        [CallerLineNumber] int sourceLineNumber = 0,
-        params object[] args)
+            string message,
+            [CallerFilePath] string sourceFilePath = "",
+            [CallerLineNumber] int sourceLineNumber = 0,
+            params object[] args)
     {
         LogDebug(string.Format(message, args), sourceFilePath, sourceLineNumber);
     }
 
     public static void LogWarn(
-        string message,
-        [CallerFilePath] string sourceFilePath = "",
-        [CallerLineNumber] int sourceLineNumber = 0,
-        params object[] args)
+            string message,
+            [CallerFilePath] string sourceFilePath = "",
+            [CallerLineNumber] int sourceLineNumber = 0,
+            params object[] args)
     {
         LogWarn(string.Format(message, args), sourceFilePath, sourceLineNumber);
     }
 
     public static void LogError(
-        string message,
-        [CallerFilePath] string sourceFilePath = "",
-        [CallerLineNumber] int sourceLineNumber = 0,
-        params object[] args)
+            string message,
+            [CallerFilePath] string sourceFilePath = "",
+            [CallerLineNumber] int sourceLineNumber = 0,
+            params object[] args)
     {
         LogError(string.Format(message, args), null, sourceFilePath, sourceLineNumber);
     }
 
     public static void LogError(
-        Exception ex,
-        string message,
-        [CallerFilePath] string sourceFilePath = "",
-        [CallerLineNumber] int sourceLineNumber = 0,
-        params object[] args)
+            Exception ex,
+            string message,
+            [CallerFilePath] string sourceFilePath = "",
+            [CallerLineNumber] int sourceLineNumber = 0,
+            params object[] args)
     {
         LogError(string.Format(message, args), ex, sourceFilePath, sourceLineNumber);
     }
@@ -160,7 +173,7 @@ public static class G
     }
 
     /// <summary>
-    /// Sets the log level. If the logger is not yet initialized, the level is stored and applied during initialization.
+    ///     Sets the log level. If the logger is not yet initialized, the level is stored and applied during initialization.
     /// </summary>
     /// <param name="logLevel">The log level to set</param>
     public static void SetLogLevel(LogLevel logLevel)
@@ -180,7 +193,7 @@ public static class G
     }
 
     /// <summary>
-    /// Gets the current cache instance, if available
+    ///     Gets the current cache instance, if available
     /// </summary>
     public static ICache? GetCache()
     {

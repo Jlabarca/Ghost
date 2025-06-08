@@ -13,5 +13,10 @@
     "Microsoft.Extensions.DependencyInjection": "9.0.0",
     "Microsoft.Extensions.Hosting": "9.0.0"
   },
-  "tags": ["service", "background", "daemon", "long-running"]
+  "tags": [
+    "service",
+    "background",
+    "daemon",
+    "long-running"
+  ]
 }

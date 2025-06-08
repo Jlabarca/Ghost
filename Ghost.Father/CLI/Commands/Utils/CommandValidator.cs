@@ -1,16 +1,14 @@
-using Ghost.Data;
+using System.Reflection;
 using Ghost.Storage;
 using Microsoft.Extensions.DependencyInjection;
 using Spectre.Console.Cli;
-using System.Reflection;
-
 namespace Ghost.Father.CLI;
 
 public class CommandValidator
 {
-    private readonly IServiceCollection _services;
     private readonly IGhostBus _bus;
     private readonly IDictionary<string, Type> _registeredCommands;
+    private readonly IServiceCollection _services;
 
     public CommandValidator(IServiceCollection services, IGhostBus bus)
     {
@@ -26,8 +24,8 @@ public class CommandValidator
 
     public ValidationResult ValidateCommands()
     {
-        var result = new ValidationResult(_bus);
-        foreach (var (commandName, commandType) in _registeredCommands)
+        ValidationResult? result = new ValidationResult(_bus);
+        foreach ((string? commandName, Type? commandType) in _registeredCommands)
         {
             try
             {
@@ -60,39 +58,41 @@ public class CommandValidator
         // Check if RegisterCommand has the required dependencies
         var requiredTypes = new[]
         {
-            typeof(IGhostBus),
-            //typeof(IStorageProvider)
+                typeof(IGhostBus)
+                //typeof(IStorageProvider)
         };
 
-        foreach (var requiredType in requiredTypes)
+        foreach (Type? requiredType in requiredTypes)
         {
             if (!HasDependency(commandType, requiredType))
             {
                 result.AddMissingDependency(
-                    commandType,
-                    "register",
-                    requiredType,
-                    $"RegisterCommand requires {requiredType.Name} dependency.");
+                        commandType,
+                        "register",
+                        requiredType,
+                        $"RegisterCommand requires {requiredType.Name} dependency.");
             }
         }
 
         // Check settings properties
-        var settingsType = GetSettingsType(commandType);
+        Type? settingsType = GetSettingsType(commandType);
         if (settingsType != null)
         {
-            var requiredSettings = new[]
+            string[]? requiredSettings = new[]
             {
-                "Name", "Args", "Watch", "Environment", "Background"
+                    "Name", "Args",
+                    "Watch", "Environment",
+                    "Background"
             };
 
-            foreach (var setting in requiredSettings)
+            foreach (string? setting in requiredSettings)
             {
                 if (!HasProperty(settingsType, setting))
                 {
                     result.AddWarning(
-                        commandType,
-                        "register",
-                        $"RegisterCommand.Settings is missing property: {setting}");
+                            commandType,
+                            "register",
+                            $"RegisterCommand.Settings is missing property: {setting}");
                 }
             }
         }
@@ -104,38 +104,40 @@ public class CommandValidator
         // Check if RunCommand has the required dependencies
         var requiredTypes = new[]
         {
-            typeof(IGhostBus)
+                typeof(IGhostBus)
         };
 
-        foreach (var requiredType in requiredTypes)
+        foreach (Type? requiredType in requiredTypes)
         {
             if (!HasDependency(commandType, requiredType))
             {
                 result.AddMissingDependency(
-                    commandType,
-                    "run",
-                    requiredType,
-                    $"RunCommand requires {requiredType.Name} dependency.");
+                        commandType,
+                        "run",
+                        requiredType,
+                        $"RunCommand requires {requiredType.Name} dependency.");
             }
         }
 
         // Check settings properties
-        var settingsType = GetSettingsType(commandType);
+        Type? settingsType = GetSettingsType(commandType);
         if (settingsType != null)
         {
-            var requiredSettings = new[]
+            string[]? requiredSettings = new[]
             {
-                "Name", "Args", "Watch", "Environment", "Background"
+                    "Name", "Args",
+                    "Watch", "Environment",
+                    "Background"
             };
 
-            foreach (var setting in requiredSettings)
+            foreach (string? setting in requiredSettings)
             {
                 if (!HasProperty(settingsType, setting))
                 {
                     result.AddWarning(
-                        commandType,
-                        "run",
-                        $"RunCommand.Settings is missing property: {setting}");
+                            commandType,
+                            "run",
+                            $"RunCommand.Settings is missing property: {setting}");
                 }
             }
         }
@@ -147,38 +149,36 @@ public class CommandValidator
         // Check if MonitorCommand has the required dependencies
         var requiredTypes = new[]
         {
-            typeof(IGhostBus)
+                typeof(IGhostBus)
         };
 
-        foreach (var requiredType in requiredTypes)
+        foreach (Type? requiredType in requiredTypes)
         {
             if (!HasDependency(commandType, requiredType))
             {
                 result.AddMissingDependency(
-                    commandType,
-                    "monitor",
-                    requiredType,
-                    $"MonitorCommand requires {requiredType.Name} dependency.");
+                        commandType,
+                        "monitor",
+                        requiredType,
+                        $"MonitorCommand requires {requiredType.Name} dependency.");
             }
         }
 
         // Check for necessary handling methods
-        var requiredMethods = new[]
+        string[]? requiredMethods = new[]
         {
-            "FetchInitialProcessList",
-            "MonitorProcessMetricsAsync",
-            "MonitorHealthStatusAsync",
-            "UpdateProcessTables"
+                "FetchInitialProcessList", "MonitorProcessMetricsAsync",
+                "MonitorHealthStatusAsync", "UpdateProcessTables"
         };
 
-        foreach (var method in requiredMethods)
+        foreach (string? method in requiredMethods)
         {
             if (!HasMethod(commandType, method))
             {
                 result.AddWarning(
-                    commandType,
-                    "monitor",
-                    $"MonitorCommand is missing method: {method}");
+                        commandType,
+                        "monitor",
+                        $"MonitorCommand is missing method: {method}");
             }
         }
     }
@@ -187,8 +187,8 @@ public class CommandValidator
     private bool HasDependency(Type type, Type dependencyType)
     {
         return type.GetConstructors()
-            .SelectMany(c => c.GetParameters())
-            .Any(p => p.ParameterType == dependencyType || dependencyType.IsAssignableFrom(p.ParameterType));
+                .SelectMany(c => c.GetParameters())
+                .Any(p => p.ParameterType == dependencyType || dependencyType.IsAssignableFrom(p.ParameterType));
     }
 
     private Type GetSettingsType(Type commandType)
@@ -204,38 +204,38 @@ public class CommandValidator
     private bool HasMethod(Type type, string methodName)
     {
         return type.GetMethods(BindingFlags.NonPublic | BindingFlags.Public | BindingFlags.Instance)
-            .Any(m => m.Name == methodName);
+                .Any(m => m.Name == methodName);
     }
     private void ValidateCommand(Type commandType, string commandName, ValidationResult result)
     {
         // Check service registration
-        var serviceDescriptor = _services.FirstOrDefault(s => s.ServiceType == commandType);
+        ServiceDescriptor? serviceDescriptor = _services.FirstOrDefault(s => s.ServiceType == commandType);
         if (serviceDescriptor == null)
         {
             result.AddError(
-                commandType,
-                commandName,
-                $"Command '{commandName}' ({commandType.Name}) is not registered in DI container. " +
-                $"Add 'services.AddTransient<{commandType.Name}>();' to your service configuration.");
+                    commandType,
+                    commandName,
+                    $"Command '{commandName}' ({commandType.Name}) is not registered in DI container. " +
+                    $"Add 'services.AddTransient<{commandType.Name}>();' to your service configuration.");
             return;
         }
 
         // Get constructor with dependencies
-        var constructor = commandType.GetConstructors()
-            .OrderByDescending(c => c.GetParameters().Length)
-            .FirstOrDefault();
+        ConstructorInfo? constructor = commandType.GetConstructors()
+                .OrderByDescending(c => c.GetParameters().Length)
+                .FirstOrDefault();
 
         if (constructor == null)
         {
             result.AddError(
-                commandType,
-                commandName,
-                $"Command '{commandName}' ({commandType.Name}) has no public constructor");
+                    commandType,
+                    commandName,
+                    $"Command '{commandName}' ({commandType.Name}) has no public constructor");
             return;
         }
 
         // Validate constructor parameters
-        foreach (var parameter in constructor.GetParameters())
+        foreach (ParameterInfo? parameter in constructor.GetParameters())
         {
             ValidateParameter(parameter, commandType, commandName, result);
         }
@@ -246,24 +246,27 @@ public class CommandValidator
 
     private void ValidateParameter(ParameterInfo parameter, Type commandType, string commandName, ValidationResult result)
     {
-        var parameterType = parameter.ParameterType;
-        var serviceDescriptor = _services.FirstOrDefault(s => s.ServiceType == parameterType);
+        Type? parameterType = parameter.ParameterType;
+        ServiceDescriptor? serviceDescriptor = _services.FirstOrDefault(s => s.ServiceType == parameterType);
 
         if (serviceDescriptor == null)
         {
             var suggestions = GetPotentialFixes(parameterType);
             result.AddMissingDependency(
-                commandType,
-                commandName,
-                parameterType,
-                $"Parameter '{parameter.Name}' of type '{parameterType.Name}' is not registered in DI container.\n" +
-                $"Potential fixes:\n{string.Join("\n", suggestions)}");
+                    commandType,
+                    commandName,
+                    parameterType,
+                    $"Parameter '{parameter.Name}' of type '{parameterType.Name}' is not registered in DI container.\n" +
+                    $"Potential fixes:\n{string.Join("\n", suggestions)}");
         }
     }
 
     private IEnumerable<string> GetPotentialFixes(Type missingType)
     {
-        if (missingType == null) yield break;
+        if (missingType == null)
+        {
+            yield break;
+        }
 
         yield return $"services.AddTransient<{missingType.Name}>();";
         yield return $"services.AddScoped<{missingType.Name}>();";
@@ -272,10 +275,10 @@ public class CommandValidator
         if (missingType.IsInterface)
         {
             var implementations = Assembly.GetExecutingAssembly().GetTypes()
-                .Where(t => t != null && !t.IsAbstract && missingType.IsAssignableFrom(t))
-                .Take(3); // Limit suggestions
+                    .Where(t => t != null && !t.IsAbstract && missingType.IsAssignableFrom(t))
+                    .Take(3); // Limit suggestions
 
-            foreach (var impl in implementations)
+            foreach (Type? impl in implementations)
             {
                 yield return $"services.AddTransient<{missingType.Name}, {impl.Name}>();";
             }
@@ -284,50 +287,46 @@ public class CommandValidator
 
     private void ValidateSettings(Type commandType, string commandName, ValidationResult result)
     {
-        var settingsProperty = commandType.GetProperty("Settings");
-        if (settingsProperty == null) return;
+        PropertyInfo? settingsProperty = commandType.GetProperty("Settings");
+        if (settingsProperty == null)
+        {
+            return;
+        }
 
-        var settingsType = settingsProperty.PropertyType;
+        Type? settingsType = settingsProperty.PropertyType;
         if (!typeof(CommandSettings).IsAssignableFrom(settingsType))
         {
             result.AddError(
-                commandType,
-                commandName,
-                $"Settings type '{settingsType.Name}' must inherit from CommandSettings");
+                    commandType,
+                    commandName,
+                    $"Settings type '{settingsType.Name}' must inherit from CommandSettings");
             return;
         }
 
         // Validate setting properties
-        foreach (var property in settingsType.GetProperties())
+        foreach (PropertyInfo? property in settingsType.GetProperties())
         {
-            var commandArgAttr = property.GetCustomAttribute<CommandArgumentAttribute>();
-            var commandOptAttr = property.GetCustomAttribute<CommandOptionAttribute>();
+            CommandArgumentAttribute? commandArgAttr = property.GetCustomAttribute<CommandArgumentAttribute>();
+            CommandOptionAttribute? commandOptAttr = property.GetCustomAttribute<CommandOptionAttribute>();
 
             if (commandArgAttr == null && commandOptAttr == null)
             {
                 result.AddWarning(
-                    commandType,
-                    commandName,
-                    $"Property '{property.Name}' in settings is not decorated with CommandArgument or CommandOption attribute");
+                        commandType,
+                        commandName,
+                        $"Property '{property.Name}' in settings is not decorated with CommandArgument or CommandOption attribute");
             }
         }
     }
 }
-
 public enum IssueType
 {
     Error,
     Warning,
     MissingDependency
 }
-
 public class ValidationIssue
 {
-    public IssueType Type { get; }
-    public Type CommandType { get; }
-    public string CommandName { get; }
-    public string Message { get; }
-    public Type DependencyType { get; init; }
 
     public ValidationIssue(IssueType type, Type commandType, string commandName, string message)
     {
@@ -336,12 +335,16 @@ public class ValidationIssue
         CommandName = commandName;
         Message = message;
     }
+    public IssueType Type { get; }
+    public Type CommandType { get; }
+    public string CommandName { get; }
+    public string Message { get; }
+    public Type DependencyType { get; init; }
 }
-
 public class ValidationResult
 {
     private readonly IGhostBus _bus;
-    private readonly List<ValidationIssue> _issues = new();
+    private readonly List<ValidationIssue> _issues = new List<ValidationIssue>();
 
     public ValidationResult(IGhostBus bus)
     {
@@ -364,17 +367,23 @@ public class ValidationResult
     {
         _issues.Add(new ValidationIssue(IssueType.MissingDependency, commandType, commandName, message)
         {
-            DependencyType = dependencyType
+                DependencyType = dependencyType
         });
     }
 
-    public IEnumerable<ValidationIssue> GetIssues() => _issues.OrderBy(i => i.Type);
+    public IEnumerable<ValidationIssue> GetIssues()
+    {
+        return _issues.OrderBy(i => i.Type);
+    }
 
-    public int GetIssueCount() => _issues.Count;
+    public int GetIssueCount()
+    {
+        return _issues.Count;
+    }
 
     public static ValidationResult Error(string message)
     {
-        var result = new ValidationResult(null);
+        ValidationResult? result = new ValidationResult(null);
         result.AddError(typeof(object), "General", message);
         return result;
     }

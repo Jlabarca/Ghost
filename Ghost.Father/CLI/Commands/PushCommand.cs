@@ -1,26 +1,11 @@
+using System.Diagnostics;
 using Ghost.Exceptions;
 using Spectre.Console;
 using Spectre.Console.Cli;
-using System.Diagnostics;
-
 namespace Ghost.Father.CLI.Commands;
 
 public class PushCommand : AsyncCommand<PushCommand.Settings>
 {
-    public class Settings : CommandSettings
-    {
-        [CommandArgument(0, "[remote]")]
-        public string Remote { get; set; }
-
-        [CommandOption("--branch")]
-        public string Branch { get; set; } = "main";
-
-        [CommandOption("--message")]
-        public string Message { get; set; } = "Update Ghost app";
-
-        [CommandOption("--force")]
-        public bool Force { get; set; }
-    }
 
     public override async Task<int> ExecuteAsync(CommandContext context, Settings settings)
     {
@@ -42,7 +27,7 @@ public class PushCommand : AsyncCommand<PushCommand.Settings>
             // Add remote if provided
             if (!string.IsNullOrEmpty(settings.Remote))
             {
-                var hasRemote = await HasRemote("origin");
+                bool hasRemote = await HasRemote("origin");
                 if (!hasRemote)
                 {
                     await RunGitCommand($"remote add origin {settings.Remote}");
@@ -51,13 +36,13 @@ public class PushCommand : AsyncCommand<PushCommand.Settings>
             }
 
             // Display status before pushing
-            var status = await GetGitStatus();
+            string? status = await GetGitStatus();
             if (!string.IsNullOrWhiteSpace(status))
             {
                 AnsiConsole.MarkupLine("\n[yellow]Changes to be pushed:[/]");
                 AnsiConsole.Write(new Panel(status)
-                    .Border(BoxBorder.Rounded)
-                    .BorderStyle(Style.Parse("grey")));
+                        .Border(BoxBorder.Rounded)
+                        .BorderStyle(Style.Parse("grey")));
             }
 
             // Confirm with user
@@ -74,17 +59,17 @@ public class PushCommand : AsyncCommand<PushCommand.Settings>
             }
 
             // Push changes
-            var pushCommand = $"push origin {settings.Branch}";
+            string? pushCommand = $"push origin {settings.Branch}";
             if (settings.Force)
             {
                 pushCommand += " --force";
             }
 
             await AnsiConsole.Status()
-                .StartAsync("Pushing changes...", async ctx =>
-                {
-                    await RunGitCommand(pushCommand);
-                });
+                    .StartAsync("Pushing changes...", async ctx =>
+                    {
+                        await RunGitCommand(pushCommand);
+                    });
 
             AnsiConsole.MarkupLine("[green]Successfully pushed changes[/]");
             return 0;
@@ -100,17 +85,17 @@ public class PushCommand : AsyncCommand<PushCommand.Settings>
     {
         try
         {
-            var startInfo = new ProcessStartInfo
+            ProcessStartInfo? startInfo = new ProcessStartInfo
             {
-                FileName = "git",
-                Arguments = "--version",
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                UseShellExecute = false,
-                CreateNoWindow = true
+                    FileName = "git",
+                    Arguments = "--version",
+                    RedirectStandardOutput = true,
+                    RedirectStandardError = true,
+                    UseShellExecute = false,
+                    CreateNoWindow = true
             };
 
-            var process = Process.Start(startInfo);
+            Process? process = Process.Start(startInfo);
             await process.WaitForExitAsync();
             return process.ExitCode == 0;
         }
@@ -148,7 +133,7 @@ public class PushCommand : AsyncCommand<PushCommand.Settings>
 
     private static async Task<bool> HasChanges()
     {
-        var output = await RunGitCommandWithOutput("status --porcelain");
+        string? output = await RunGitCommandWithOutput("status --porcelain");
         return !string.IsNullOrWhiteSpace(output);
     }
 
@@ -159,48 +144,62 @@ public class PushCommand : AsyncCommand<PushCommand.Settings>
 
     private static async Task RunGitCommand(string args)
     {
-        var startInfo = new ProcessStartInfo
+        ProcessStartInfo? startInfo = new ProcessStartInfo
         {
-            FileName = "git",
-            Arguments = args,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            UseShellExecute = false,
-            CreateNoWindow = true
+                FileName = "git",
+                Arguments = args,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                UseShellExecute = false,
+                CreateNoWindow = true
         };
 
-        var process = Process.Start(startInfo);
+        Process? process = Process.Start(startInfo);
         await process.WaitForExitAsync();
 
         if (process.ExitCode != 0)
         {
-            var error = await process.StandardError.ReadToEndAsync();
+            string? error = await process.StandardError.ReadToEndAsync();
             throw new GhostException($"Git command failed: {error}", ErrorCode.GitError);
         }
     }
 
     private static async Task<string> RunGitCommandWithOutput(string args)
     {
-        var startInfo = new ProcessStartInfo
+        ProcessStartInfo? startInfo = new ProcessStartInfo
         {
-            FileName = "git",
-            Arguments = args,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            UseShellExecute = false,
-            CreateNoWindow = true
+                FileName = "git",
+                Arguments = args,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                UseShellExecute = false,
+                CreateNoWindow = true
         };
 
-        var process = Process.Start(startInfo);
-        var output = await process.StandardOutput.ReadToEndAsync();
+        Process? process = Process.Start(startInfo);
+        string? output = await process.StandardOutput.ReadToEndAsync();
         await process.WaitForExitAsync();
 
         if (process.ExitCode != 0)
         {
-            var error = await process.StandardError.ReadToEndAsync();
+            string? error = await process.StandardError.ReadToEndAsync();
             throw new GhostException($"Git command failed: {error}", ErrorCode.GitError);
         }
 
         return output;
+    }
+    public class Settings : CommandSettings
+    {
+        [CommandArgument(0, "[remote]")]
+        public string Remote { get; set; }
+
+        [CommandOption("--branch")]
+        public string Branch { get; set; } = "main";
+
+        [CommandOption("--message")]
+        public string Message { get; set; } = "Update Ghost app";
+
+        [CommandOption("--force")]
+        public bool Force { get; set; }
     }
 }

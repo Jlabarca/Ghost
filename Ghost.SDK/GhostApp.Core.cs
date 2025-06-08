@@ -2,7 +2,7 @@ using Ghost.Config;
 using Ghost.Data;
 using Ghost.Storage;
 using Microsoft.Extensions.DependencyInjection;
-
+using Microsoft.Extensions.Logging;
 namespace Ghost;
 
 public enum GhostAppState
@@ -16,6 +16,37 @@ public enum GhostAppState
 }
 public abstract partial class GhostApp : IAsyncDisposable
 {
+
+#region Tick Timer
+
+    private async void OnTickCallback(object state)
+    {
+        if (State != GhostAppState.Running || _cts.IsCancellationRequested)
+        {
+            return;
+        }
+
+        try
+        {
+            await OnTickAsync();
+            await ReportMetricsAsync(); // Reporting is optional and checks Connection internally, defined in GhostApp.Connection.cs
+        }
+        catch (Exception ex)
+        {
+            G.LogError(ex, "Error in OnTickAsync execution.");
+            OnErrorOccurred(ex); // Notify, but don't necessarily stop the service for a tick error
+        }
+    }
+
+#endregion
+
+    // Helper to determine if the current app is the daemon itself
+    // to avoid connecting to itself.
+    private bool IsDaemonApp()
+    {
+        return Config?.App?.Id?.Equals("ghost-daemon", StringComparison.OrdinalIgnoreCase) == true ||
+               GetType().Name.Equals("GhostFatherDaemon", StringComparison.OrdinalIgnoreCase);
+    }
 
 #region Properties
 
@@ -81,8 +112,11 @@ public abstract partial class GhostApp : IAsyncDisposable
         try
         {
             // 1. Load Configuration
-            Config = config ?? LoadConfigFromYaml() ?? CreateDefaultConfig(); // LoadConfigFromYaml defined in GhostApp.Settings.cs
+
+            Config = config; // ?? LoadConfigFromYaml() ?? CreateDefaultConfig(); // LoadConfigFromYaml defined in GhostApp.Settings.cs
+            G.SetLogLevel(Config.Core.LogLevel.GetValueOrDefault(LogLevel.Information));
             G.LogInfo($"Using App ID: {Config.App.Id}, Name: {Config.App.Name}");
+            G.LogDebug(Config.ToYaml() ?? "Config is null, using default configuration.");
 
             // 2. Configure Services (DI Container Setup)
             Services = ConfigureServicesBase(); // This will call the partial ConfigureServices method, defined in GhostApp.Services.cs
@@ -117,7 +151,10 @@ public abstract partial class GhostApp : IAsyncDisposable
                 _tickTimer = new Timer(OnTickCallback, null, TickInterval, TickInterval);
                 RegisterDisposalAction(async () =>
                 {
-                    if (_tickTimer != null) await _tickTimer.DisposeAsync();
+                    if (_tickTimer != null)
+                    {
+                        await _tickTimer.DisposeAsync();
+                    }
                 });
             }
 
@@ -156,10 +193,22 @@ public abstract partial class GhostApp : IAsyncDisposable
 #region Abstract and Virtual Lifecycle Methods
 
     public abstract Task RunAsync(IEnumerable<string> args);
-    protected virtual Task OnBeforeRunAsync() => Task.CompletedTask;
-    protected virtual Task OnAfterRunAsync() => Task.CompletedTask;
-    protected virtual Task OnErrorAsync(Exception ex) => Task.CompletedTask;
-    protected virtual Task OnTickAsync() => Task.CompletedTask;
+    protected virtual Task OnBeforeRunAsync()
+    {
+        return Task.CompletedTask;
+    }
+    protected virtual Task OnAfterRunAsync()
+    {
+        return Task.CompletedTask;
+    }
+    protected virtual Task OnErrorAsync(Exception ex)
+    {
+        return Task.CompletedTask;
+    }
+    protected virtual Task OnTickAsync()
+    {
+        return Task.CompletedTask;
+    }
 
 #endregion
 
@@ -167,8 +216,11 @@ public abstract partial class GhostApp : IAsyncDisposable
 
     private void UpdateState(GhostAppState newState)
     {
-        if (State == newState) return;
-        var oldState = State;
+        if (State == newState)
+        {
+            return;
+        }
+        GhostAppState oldState = State;
         State = newState;
         G.LogDebug($"App state changed for {Config?.App?.Id ?? GetType().Name}: {oldState} -> {newState}");
         try
@@ -196,16 +248,16 @@ public abstract partial class GhostApp : IAsyncDisposable
     private async Task HandleAutoRestartAsync(Exception ex)
     {
         _restartAttempts++;
-        var now = DateTime.UtcNow;
+        DateTime now = DateTime.UtcNow;
         if (_lastRestartTime.HasValue && (now - _lastRestartTime.Value).TotalMinutes > 5)
         {
             _restartAttempts = 1; // Reset counter after a period of stability
         }
         _lastRestartTime = now;
 
-        var backoffSeconds = Math.Min(60, Math.Pow(2, _restartAttempts - 1)); // Max 1 min backoff
-        var jitter = new Random().NextDouble() * 0.5 + 0.5; // 50-100% of base delay
-        var delayMs = (int)(backoffSeconds * 1000 * jitter);
+        double backoffSeconds = Math.Min(60, Math.Pow(2, _restartAttempts - 1)); // Max 1 min backoff
+        double jitter = new Random().NextDouble() * 0.5 + 0.5; // 50-100% of base delay
+        int delayMs = (int)(backoffSeconds * 1000 * jitter);
 
         G.LogInfo($"Application failed. Restarting in {delayMs / 1000.0:0.0}s (Attempt: {_restartAttempts}{(MaxRestartAttempts > 0 ? $"/{MaxRestartAttempts}" : "")})");
         await ReportHealthAsync("Restarting", $"Restarting after error: {ex.Message}");
@@ -220,31 +272,14 @@ public abstract partial class GhostApp : IAsyncDisposable
 
 #endregion
 
-#region Tick Timer
-
-    private async void OnTickCallback(object state)
-    {
-        if (State != GhostAppState.Running || _cts.IsCancellationRequested) return;
-
-        try
-        {
-            await OnTickAsync();
-            await ReportMetricsAsync(); // Reporting is optional and checks Connection internally, defined in GhostApp.Connection.cs
-        }
-        catch (Exception ex)
-        {
-            G.LogError(ex, "Error in OnTickAsync execution.");
-            OnErrorOccurred(ex); // Notify, but don't necessarily stop the service for a tick error
-        }
-    }
-
-#endregion
-
 #region Stop and Dispose
 
     public async Task StopAsync()
     {
-        if (State == GhostAppState.Stopped || State == GhostAppState.Stopping) return;
+        if (State == GhostAppState.Stopped || State == GhostAppState.Stopping)
+        {
+            return;
+        }
 
         UpdateState(GhostAppState.Stopping);
         G.LogInfo($"Stopping {Config?.App?.Name ?? GetType().Name}...");
@@ -273,7 +308,7 @@ public abstract partial class GhostApp : IAsyncDisposable
         _disposalActions.Add(action);
     }
 
-    public async virtual ValueTask DisposeAsync() // Made virtual
+    public virtual async ValueTask DisposeAsync()
     {
         if (State != GhostAppState.Stopped && State != GhostAppState.Failed && State != GhostAppState.Created)
         {
@@ -320,12 +355,4 @@ public abstract partial class GhostApp : IAsyncDisposable
     }
 
 #endregion
-
-    // Helper to determine if the current app is the daemon itself
-    // to avoid connecting to itself.
-    private bool IsDaemonApp()
-    {
-        return (Config?.App?.Id?.Equals("ghost-daemon", StringComparison.OrdinalIgnoreCase) == true) ||
-               (GetType().Name.Equals("GhostFatherDaemon", StringComparison.OrdinalIgnoreCase));
-    }
 }

@@ -1,31 +1,30 @@
-using Ghost.Config;
-using Ghost.Logging;
 using System.Security.Cryptography;
 using System.Text.Json;
+using Ghost.Config;
+using Ghost.Logging;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
-
 namespace Ghost.Data;
 
 /// <summary>
-/// Decorator that adds encryption to sensitive data before storing it.
-/// Keys with the prefix "secure:" will be encrypted before storage and decrypted on retrievaG.
+///     Decorator that adds encryption to sensitive data before storing it.
+///     Keys with the prefix "secure:" will be encrypted before storage and decrypted on retrievaG.
 /// </summary>
 public class EncryptedGhostData : IGhostData
 {
+
+    /// <summary>
+    ///     The prefix used to identify keys that should be encrypted.
+    /// </summary>
+    public const string SecureKeyPrefix = "secure:";
+    private readonly Lazy<Aes> _aesProvider;
+    private readonly IOptions<SecurityDataConfig> _config;
     private readonly IGhostData _inner;
     private readonly IGhostLogger _logger;
-    private readonly IOptions<SecurityDataConfig> _config;
-    private readonly Lazy<Aes> _aesProvider;
     private bool _disposed;
 
     /// <summary>
-    /// The prefix used to identify keys that should be encrypted.
-    /// </summary>
-    public const string SecureKeyPrefix = "secure:";
-
-    /// <summary>
-    /// Initializes a new instance of the <see cref="EncryptedGhostData"/> class.
+    ///     Initializes a new instance of the <see cref="EncryptedGhostData" /> class.
     /// </summary>
     /// <param name="inner">The decorated IGhostData implementation.</param>
     /// <param name="config">The security configuration.</param>
@@ -42,7 +41,7 @@ public class EncryptedGhostData : IGhostData
         // Initialize the AES provider lazily
         _aesProvider = new Lazy<Aes>(() =>
         {
-            var provider = Aes.Create();
+            Aes? provider = Aes.Create();
             provider.Key = Convert.FromBase64String(_config.Value.EncryptionKey);
             provider.IV = Convert.FromBase64String(_config.Value.EncryptionIV);
             return provider;
@@ -50,12 +49,53 @@ public class EncryptedGhostData : IGhostData
     }
 
     /// <inheritdoc />
-    public IDatabaseClient GetDatabaseClient() => _inner.GetDatabaseClient();
+    public IDatabaseClient GetDatabaseClient()
+    {
+        return _inner.GetDatabaseClient();
+    }
 
-        #region Key-Value Operations
+#region Transaction Support
 
     /// <inheritdoc />
-    public async Task<T?> GetAsync<T>(string key, CancellationToken ct = default)
+    public async Task<IGhostTransaction> BeginTransactionAsync(CancellationToken ct = default(CancellationToken))
+    {
+        ThrowIfDisposed();
+
+        // Transactions pass through to the inner implementation
+        IGhostTransaction transaction = await _inner.BeginTransactionAsync(ct);
+
+        // We don't currently wrap transactions with encryption
+        return transaction;
+    }
+
+#endregion
+
+#region IAsyncDisposable
+
+    /// <inheritdoc />
+    public async ValueTask DisposeAsync()
+    {
+        if (_disposed)
+        {
+            return;
+        }
+
+        _disposed = true;
+
+        if (_aesProvider.IsValueCreated)
+        {
+            _aesProvider.Value.Dispose();
+        }
+
+        await _inner.DisposeAsync();
+    }
+
+#endregion
+
+#region Key-Value Operations
+
+    /// <inheritdoc />
+    public async Task<T?> GetAsync<T>(string key, CancellationToken ct = default(CancellationToken))
     {
         ThrowIfDisposed();
 
@@ -65,12 +105,14 @@ public class EncryptedGhostData : IGhostData
             try
             {
                 // Get the encrypted value as byte array
-                var encryptedValue = await _inner.GetAsync<byte[]>(key, ct);
+                byte[]? encryptedValue = await _inner.GetAsync<byte[]>(key, ct);
                 if (encryptedValue == null || encryptedValue.Length == 0)
-                    return default;
+                {
+                    return default(T?);
+                }
 
                 // Decrypt the value
-                var decryptedJson = DecryptValue(encryptedValue);
+                string decryptedJson = DecryptValue(encryptedValue);
 
                 // Deserialize the decrypted JSON
                 return JsonSerializer.Deserialize<T>(decryptedJson);
@@ -87,7 +129,7 @@ public class EncryptedGhostData : IGhostData
     }
 
     /// <inheritdoc />
-    public async Task SetAsync<T>(string key, T value, TimeSpan? expiry = null, CancellationToken ct = default)
+    public async Task SetAsync<T>(string key, T value, TimeSpan? expiry = null, CancellationToken ct = default(CancellationToken))
     {
         ThrowIfDisposed();
 
@@ -104,10 +146,10 @@ public class EncryptedGhostData : IGhostData
                 }
 
                 // Serialize the value to JSON
-                var json = JsonSerializer.Serialize(value);
+                string json = JsonSerializer.Serialize(value);
 
                 // Encrypt the JSON
-                var encryptedValue = EncryptValue(json);
+                byte[] encryptedValue = EncryptValue(json);
 
                 // Store the encrypted value
                 await _inner.SetAsync(key, encryptedValue, expiry, ct);
@@ -126,25 +168,25 @@ public class EncryptedGhostData : IGhostData
     }
 
     /// <inheritdoc />
-    public async Task<bool> DeleteAsync(string key, CancellationToken ct = default)
+    public async Task<bool> DeleteAsync(string key, CancellationToken ct = default(CancellationToken))
     {
         ThrowIfDisposed();
         return await _inner.DeleteAsync(key, ct);
     }
 
     /// <inheritdoc />
-    public async Task<bool> ExistsAsync(string key, CancellationToken ct = default)
+    public async Task<bool> ExistsAsync(string key, CancellationToken ct = default(CancellationToken))
     {
         ThrowIfDisposed();
         return await _inner.ExistsAsync(key, ct);
     }
 
-        #endregion
+#endregion
 
-        #region Batch Key-Value Operations
+#region Batch Key-Value Operations
 
     /// <inheritdoc />
-    public async Task<IDictionary<string, T?>> GetBatchAsync<T>(IEnumerable<string> keys, CancellationToken ct = default)
+    public async Task<IDictionary<string, T?>> GetBatchAsync<T>(IEnumerable<string> keys, CancellationToken ct = default(CancellationToken))
     {
         ThrowIfDisposed();
 
@@ -153,12 +195,16 @@ public class EncryptedGhostData : IGhostData
         var nonSecureKeys = new List<string>();
 
         // Separate secure and non-secure keys
-        foreach (var key in keys)
+        foreach (string key in keys)
         {
             if (key.StartsWith(SecureKeyPrefix, StringComparison.OrdinalIgnoreCase))
+            {
                 secureKeys.Add(key);
+            }
             else
+            {
                 nonSecureKeys.Add(key);
+            }
         }
 
         // Process non-secure keys normally
@@ -172,7 +218,7 @@ public class EncryptedGhostData : IGhostData
         }
 
         // Process secure keys one by one (batch decryption could be added later)
-        foreach (var key in secureKeys)
+        foreach (string key in secureKeys)
         {
             try
             {
@@ -181,7 +227,7 @@ public class EncryptedGhostData : IGhostData
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Failed to decrypt batch value for key {Key}", key);
-                result[key] = default;
+                result[key] = default(T?);
             }
         }
 
@@ -189,7 +235,7 @@ public class EncryptedGhostData : IGhostData
     }
 
     /// <inheritdoc />
-    public async Task SetBatchAsync<T>(IDictionary<string, T> items, TimeSpan? expiry = null, CancellationToken ct = default)
+    public async Task SetBatchAsync<T>(IDictionary<string, T> items, TimeSpan? expiry = null, CancellationToken ct = default(CancellationToken))
     {
         ThrowIfDisposed();
 
@@ -197,12 +243,16 @@ public class EncryptedGhostData : IGhostData
         var nonSecureItems = new Dictionary<string, T>();
 
         // Separate secure and non-secure keys
-        foreach (var key in items.Keys)
+        foreach (string key in items.Keys)
         {
             if (key.StartsWith(SecureKeyPrefix, StringComparison.OrdinalIgnoreCase))
+            {
                 secureItems[key] = items[key];
+            }
             else
+            {
                 nonSecureItems[key] = items[key];
+            }
         }
 
         // Process non-secure items normally
@@ -219,94 +269,78 @@ public class EncryptedGhostData : IGhostData
     }
 
     /// <inheritdoc />
-    public async Task<int> DeleteBatchAsync(IEnumerable<string> keys, CancellationToken ct = default)
+    public async Task<int> DeleteBatchAsync(IEnumerable<string> keys, CancellationToken ct = default(CancellationToken))
     {
         ThrowIfDisposed();
         return await _inner.DeleteBatchAsync(keys, ct);
     }
 
-        #endregion
+#endregion
 
-        #region SQL Operations
+#region SQL Operations
 
     /// <inheritdoc />
-    public async Task<T?> QuerySingleAsync<T>(string sql, object? param = null, CancellationToken ct = default)
+    public async Task<T?> QuerySingleAsync<T>(string sql, object? param = null, CancellationToken ct = default(CancellationToken))
     {
         ThrowIfDisposed();
         return await _inner.QuerySingleAsync<T>(sql, param, ct);
     }
 
     /// <inheritdoc />
-    public async Task<IEnumerable<T>> QueryAsync<T>(string sql, object? param = null, CancellationToken ct = default)
+    public async Task<IEnumerable<T>> QueryAsync<T>(string sql, object? param = null, CancellationToken ct = default(CancellationToken))
     {
         ThrowIfDisposed();
         return await _inner.QueryAsync<T>(sql, param, ct);
     }
 
     /// <inheritdoc />
-    public async Task<int> ExecuteAsync(string sql, object? param = null, CancellationToken ct = default)
+    public async Task<int> ExecuteAsync(string sql, object? param = null, CancellationToken ct = default(CancellationToken))
     {
         ThrowIfDisposed();
         return await _inner.ExecuteAsync(sql, param, ct);
     }
 
     /// <inheritdoc />
-    public async Task<int> ExecuteBatchAsync(IEnumerable<(string sql, object? param)> commands, CancellationToken ct = default)
+    public async Task<int> ExecuteBatchAsync(IEnumerable<(string sql, object? param)> commands, CancellationToken ct = default(CancellationToken))
     {
         ThrowIfDisposed();
         return await _inner.ExecuteBatchAsync(commands, ct);
     }
 
-        #endregion
+#endregion
 
-        #region Transaction Support
-
-    /// <inheritdoc />
-    public async Task<IGhostTransaction> BeginTransactionAsync(CancellationToken ct = default)
-    {
-        ThrowIfDisposed();
-
-        // Transactions pass through to the inner implementation
-        var transaction = await _inner.BeginTransactionAsync(ct);
-
-        // We don't currently wrap transactions with encryption
-        return transaction;
-    }
-
-        #endregion
-
-        #region Schema Operations
+#region Schema Operations
 
     /// <inheritdoc />
-    public async Task<bool> TableExistsAsync(string tableName, CancellationToken ct = default)
+    public async Task<bool> TableExistsAsync(string tableName, CancellationToken ct = default(CancellationToken))
     {
         ThrowIfDisposed();
         return await _inner.TableExistsAsync(tableName, ct);
     }
 
     /// <inheritdoc />
-    public async Task<IEnumerable<string>> GetTableNamesAsync(CancellationToken ct = default)
+    public async Task<IEnumerable<string>> GetTableNamesAsync(CancellationToken ct = default(CancellationToken))
     {
         ThrowIfDisposed();
         return await _inner.GetTableNamesAsync(ct);
     }
 
-        #endregion
+#endregion
 
-        #region Encryption Helpers
+#region Encryption Helpers
 
     /// <summary>
-    /// Encrypts a string value using AES encryption.
+    ///     Encrypts a string value using AES encryption.
     /// </summary>
     /// <param name="value">The value to encrypt.</param>
     /// <returns>The encrypted value as a byte array.</returns>
     private byte[] EncryptValue(string value)
     {
-        using var aes = _aesProvider.Value;
-        using var encryptor = aes.CreateEncryptor(aes.Key, aes.IV);
-        using var ms = new MemoryStream();
-        using (var cs = new CryptoStream(ms, encryptor, CryptoStreamMode.Write))
-        using (var sw = new StreamWriter(cs))
+        using Aes? aes = _aesProvider.Value;
+        using ICryptoTransform? encryptor = aes.CreateEncryptor(aes.Key, aes.IV);
+        using MemoryStream? ms = new MemoryStream();
+        using (CryptoStream? cs = new CryptoStream(ms, encryptor, CryptoStreamMode.Write))
+        using (StreamWriter? sw = new StreamWriter(cs))
         {
             sw.Write(value);
         }
@@ -315,67 +349,48 @@ public class EncryptedGhostData : IGhostData
     }
 
     /// <summary>
-    /// Decrypts a byte array to a string value using AES encryption.
+    ///     Decrypts a byte array to a string value using AES encryption.
     /// </summary>
     /// <param name="encryptedValue">The encrypted value.</param>
     /// <returns>The decrypted value as a string.</returns>
     private string DecryptValue(byte[] encryptedValue)
     {
-        using var aes = _aesProvider.Value;
-        using var decryptor = aes.CreateDecryptor(aes.Key, aes.IV);
-        using var ms = new MemoryStream(encryptedValue);
-        using var cs = new CryptoStream(ms, decryptor, CryptoStreamMode.Read);
-        using var sr = new StreamReader(cs);
+        using Aes? aes = _aesProvider.Value;
+        using ICryptoTransform? decryptor = aes.CreateDecryptor(aes.Key, aes.IV);
+        using MemoryStream? ms = new MemoryStream(encryptedValue);
+        using CryptoStream? cs = new CryptoStream(ms, decryptor, CryptoStreamMode.Read);
+        using StreamReader? sr = new StreamReader(cs);
 
         return sr.ReadToEnd();
     }
 
     /// <summary>
-    /// Throws if this object has been disposed.
+    ///     Throws if this object has been disposed.
     /// </summary>
     private void ThrowIfDisposed()
     {
         if (_disposed)
-            throw new ObjectDisposedException(nameof(EncryptedGhostData));
-    }
-
-        #endregion
-
-        #region IAsyncDisposable
-
-    /// <inheritdoc />
-    public async ValueTask DisposeAsync()
-    {
-        if (_disposed)
-            return;
-
-        _disposed = true;
-
-        if (_aesProvider.IsValueCreated)
         {
-            _aesProvider.Value.Dispose();
+            throw new ObjectDisposedException(nameof(EncryptedGhostData));
         }
-
-        await _inner.DisposeAsync();
     }
 
-        #endregion
+#endregion
 }
-
 /// <summary>
-/// Exception thrown when a security-related operation fails.
+///     Exception thrown when a security-related operation fails.
 /// </summary>
 public class GhostSecurityException : Exception
 {
     /// <summary>
-    /// Initializes a new instance of the <see cref="GhostSecurityException"/> class.
+    ///     Initializes a new instance of the <see cref="GhostSecurityException" /> class.
     /// </summary>
     public GhostSecurityException() : base("A security operation failed")
     {
     }
 
     /// <summary>
-    /// Initializes a new instance of the <see cref="GhostSecurityException"/> class with the specified message.
+    ///     Initializes a new instance of the <see cref="GhostSecurityException" /> class with the specified message.
     /// </summary>
     /// <param name="message">The message that describes the error.</param>
     public GhostSecurityException(string message) : base(message)
@@ -383,7 +398,8 @@ public class GhostSecurityException : Exception
     }
 
     /// <summary>
-    /// Initializes a new instance of the <see cref="GhostSecurityException"/> class with the specified message and inner exception.
+    ///     Initializes a new instance of the <see cref="GhostSecurityException" /> class with the specified message and inner
+    ///     exception.
     /// </summary>
     /// <param name="message">The message that describes the error.</param>
     /// <param name="innerException">The exception that is the cause of the current exception.</param>

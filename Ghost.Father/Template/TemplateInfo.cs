@@ -1,10 +1,17 @@
-using Newtonsoft.Json;
 using System.Reflection;
-
+using Newtonsoft.Json;
+using Newtonsoft.Json.Serialization;
 namespace Ghost.Templates;
 
 public class TemplateInfo
 {
+
+    private static readonly JsonSerializerSettings Settings = new JsonSerializerSettings
+    {
+            Formatting = Formatting.Indented,
+            NullValueHandling = NullValueHandling.Ignore,
+            ContractResolver = new CamelCasePropertyNamesContractResolver()
+    };
     [JsonProperty("name")]
     public string Name { get; set; } = "";
 
@@ -21,33 +28,26 @@ public class TemplateInfo
     public string TemplateRoot { get; set; } = "";
 
     [JsonProperty("variables")]
-    public Dictionary<string, string> Variables { get; set; } = new();
+    public Dictionary<string, string> Variables { get; set; } = new Dictionary<string, string>();
 
     [JsonProperty("requiredPackages")]
-    public Dictionary<string, string> RequiredPackages { get; set; } = new();
+    public Dictionary<string, string> RequiredPackages { get; set; } = new Dictionary<string, string>();
 
     [JsonProperty("tags")]
-    public List<string> Tags { get; set; } = new();
-
-    private static readonly JsonSerializerSettings Settings = new()
-    {
-        Formatting = Formatting.Indented,
-        NullValueHandling = NullValueHandling.Ignore,
-        ContractResolver = new Newtonsoft.Json.Serialization.CamelCasePropertyNamesContractResolver()
-    };
+    public List<string> Tags { get; set; } = new List<string>();
 
     public void LoadTemplateInfo(string? templateRoot = null)
     {
-        var aux = Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location);
+        string? aux = Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location);
         TemplateRoot = templateRoot ?? aux;
 
-        var infoPath = Path.Combine(TemplateRoot, "template.json");
+        string? infoPath = Path.Combine(TemplateRoot, "template.json");
         if (File.Exists(infoPath))
         {
             try
             {
-                var json = File.ReadAllText(infoPath);
-                var info = JsonConvert.DeserializeObject<TemplateInfo>(json, Settings);
+                string? json = File.ReadAllText(infoPath);
+                TemplateInfo? info = JsonConvert.DeserializeObject<TemplateInfo>(json, Settings);
 
                 if (info == null)
                 {
@@ -87,7 +87,9 @@ public class TemplateInfo
         foreach (var package in RequiredPackages)
         {
             if (!await DotNetHelper.IsPackageInstalledAsync(package.Key))
+            {
                 return false;
+            }
         }
         return true;
     }
@@ -100,8 +102,8 @@ public class TemplateInfo
             throw new InvalidOperationException("TemplateRoot not set");
         }
 
-        var infoPath = Path.Combine(TemplateRoot, "template.json");
-        var json = JsonConvert.SerializeObject(this, Settings);
+        string? infoPath = Path.Combine(TemplateRoot, "template.json");
+        string? json = JsonConvert.SerializeObject(this, Settings);
         File.WriteAllText(infoPath, json);
     }
 }

@@ -2,41 +2,46 @@ namespace Ghost.Modules;
 
 public class ModuleRegistry
 {
-  private readonly Dictionary<string, Type> _moduleTypes
-      = new Dictionary<string, Type>();
-  private readonly Dictionary<string, IGhostModule> _instances
-      = new Dictionary<string, IGhostModule>();
+    private readonly Dictionary<string, IGhostModule> _instances
+            = new Dictionary<string, IGhostModule>();
+    private readonly Dictionary<string, Type> _moduleTypes
+            = new Dictionary<string, Type>();
 
-  public void RegisterModule<TModule, TConfig>()
-      where TModule : GhostModule<TConfig>
-      where TConfig : ModuleConfig
-  {
-    var name = typeof(TModule).Name;
-    _moduleTypes[name] = typeof(TModule);
-  }
+    public void RegisterModule<TModule, TConfig>()
+            where TModule : GhostModule<TConfig>
+            where TConfig : ModuleConfig
+    {
+        string? name = typeof(TModule).Name;
+        _moduleTypes[name] = typeof(TModule);
+    }
 
-  public async Task<IGhostModule> CreateModuleAsync(
-      string name,
-      ModuleConfig config)
-  {
-    if (!_moduleTypes.TryGetValue(name, out var moduleType))
-      throw new KeyNotFoundException($"Module {name} not registered");
+    public async Task<IGhostModule> CreateModuleAsync(
+            string name,
+            ModuleConfig config)
+    {
+        if (!_moduleTypes.TryGetValue(name, out Type? moduleType))
+        {
+            throw new KeyNotFoundException($"Module {name} not registered");
+        }
 
-    var module = (IGhostModule)Activator.CreateInstance(
-        moduleType, config);
+        IGhostModule? module = (IGhostModule)Activator.CreateInstance(
+                moduleType, config);
 
-    await module.InitializeAsync();
-    _instances[name] = module;
+        await module.InitializeAsync();
+        _instances[name] = module;
 
-    return module;
-  }
+        return module;
+    }
 
-  public IGhostModule GetModule(string name)
-  {
-    return _instances.TryGetValue(name, out var module)
-        ? module
-        : throw new KeyNotFoundException($"Module {name} not initialized");
-  }
+    public IGhostModule GetModule(string name)
+    {
+        return _instances.TryGetValue(name, out IGhostModule? module)
+                ? module
+                : throw new KeyNotFoundException($"Module {name} not initialized");
+    }
 
-  public IEnumerable<IGhostModule> GetAllModules() => _instances.Values;
+    public IEnumerable<IGhostModule> GetAllModules()
+    {
+        return _instances.Values;
+    }
 }

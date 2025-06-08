@@ -1,25 +1,22 @@
-using Ghost.Config;
-using Ghost.Exceptions;
-using Spectre.Console;
-using Spectre.Console.Cli;
 using System.ComponentModel;
 using System.Diagnostics;
+using Ghost.Exceptions;
 using Ghost.Templates;
 using Microsoft.Extensions.DependencyInjection;
-
-
+using Spectre.Console;
+using Spectre.Console.Cli;
 namespace Ghost.Father.CLI.Commands;
 
 /// <summary>
-/// Command for installing Ghost to the system
+///     Command for installing Ghost to the system
 /// </summary>
 public class InstallCommand : AsyncCommand<InstallCommand.Settings>
 {
-    private readonly InstallationService _installationService;
-    private readonly TemplateManager _templateManager;
     private readonly EnvironmentSetup _environmentSetup;
+    private readonly InstallationService _installationService;
     private readonly ProcessManager _processManager;
     private readonly SdkBuildService _sdkBuildService;
+    private readonly TemplateManager _templateManager;
 
     public InstallCommand(IServiceProvider services)
     {
@@ -33,131 +30,132 @@ public class InstallCommand : AsyncCommand<InstallCommand.Settings>
         _sdkBuildService = new SdkBuildService();
     }
 
-    public class Settings : CommandSettings
-    {
-        [CommandOption("--force")]
-        [Description("Force installation even if Ghost is already installed")]
-        public bool Force { get; set; }
-
-        [CommandOption("--path")]
-        [Description("Custom installation path")]
-        public string? CustomInstallPath { get; set; }
-
-        [CommandOption("--repair")]
-        [Description("Repair existing installation")]
-        public bool Repair { get; set; }
-    }
-
     public override async Task<int> ExecuteAsync(CommandContext context, Settings settings)
     {
-        var installPath = settings.CustomInstallPath ?? _installationService.GetDefaultInstallPath();
+        string? installPath = settings.CustomInstallPath ?? _installationService.GetDefaultInstallPath();
 
         return await AnsiConsole.Status()
-            .StartAsync("Installing Ghost...", async ctx =>
-            {
-                try
+                .StartAsync("Installing Ghost...", async ctx =>
                 {
+                    try
+                    {
                     #region Terminate running processes
-                    //await _processManager.TerminateGhostProcessesAsync(settings.Force);
+
+                        //await _processManager.TerminateGhostProcessesAsync(settings.Force);
+
                     #endregion
 
                     #region Check for existing installation
-                    if (Directory.Exists(installPath) && !settings.Force && !settings.Repair)
-                    {
-                        AnsiConsole.MarkupLine("[yellow]Ghost is already installed at:[/] " + installPath);
-                        AnsiConsole.MarkupLine("Use --force to reinstall or --repair to repair the installation.");
-                        return 1;
-                    }
+
+                        if (Directory.Exists(installPath) && !settings.Force && !settings.Repair)
+                        {
+                            AnsiConsole.MarkupLine("[yellow]Ghost is already installed at:[/] " + installPath);
+                            AnsiConsole.MarkupLine("Use --force to reinstall or --repair to repair the installation.");
+                            return 1;
+                        }
+
                     #endregion
 
                     #region Create installation directories
-                    ctx.Status("Creating installation directories...");
-                    var installStructure = _installationService.CreateInstallationDirectories(installPath);
+
+                        ctx.Status("Creating installation directories...");
+                        InstallationService.InstallStructure? installStructure = _installationService.CreateInstallationDirectories(installPath);
+
                     #endregion
 
                     #region Copy executable files
-                    ctx.Status("Copying executable files...");
-                    await _installationService.CopyExecutableFilesAsync(installStructure.BinDir, ctx);
+
+                        ctx.Status("Copying executable files...");
+                        await _installationService.CopyExecutableFilesAsync(installStructure.BinDir, ctx);
+
                     #endregion
 
                     #region Install templates
-                    ctx.Status("Installing templates...");
-                    await _templateManager.InstallTemplatesAsync(installStructure.TemplatesDir, settings.Force, ctx);
+
+                        ctx.Status("Installing templates...");
+                        await _templateManager.InstallTemplatesAsync(installStructure.TemplatesDir, settings.Force, ctx);
+
                     #endregion
 
                     #region Update PATH and shell configuration
-                    ctx.Status("Updating system PATH and shell configuration...");
-                    await _environmentSetup.UpdatePathAndShellConfigAsync(installStructure.BinDir);
+
+                        ctx.Status("Updating system PATH and shell configuration...");
+                        await _environmentSetup.UpdatePathAndShellConfigAsync(installStructure.BinDir);
+
                     #endregion
 
                     #region Build SDK libraries
-                    ctx.Status("Building SDK libraries...");
-                    if (!await _sdkBuildService.BuildSdkLibrariesAsync(installStructure.LibsDir, ctx))
-                    {
-                        AnsiConsole.MarkupLine("[yellow]Warning: Failed to build SDK libraries.[/] " +
-                                               "Projects will use NuGet packages instead.");
-                    }
+
+                        ctx.Status("Building SDK libraries...");
+                        if (!await _sdkBuildService.BuildSdkLibrariesAsync(installStructure.LibsDir, ctx))
+                        {
+                            AnsiConsole.MarkupLine("[yellow]Warning: Failed to build SDK libraries.[/] " +
+                                                   "Projects will use NuGet packages instead.");
+                        }
+
                     #endregion
 
                     #region Set environment variables
-                    Environment.SetEnvironmentVariable("GHOST_INSTALL", installPath, EnvironmentVariableTarget.User);
-                    Environment.SetEnvironmentVariable("GHOST_INSTALL", installPath); // Current process
+
+                        Environment.SetEnvironmentVariable("GHOST_INSTALL", installPath, EnvironmentVariableTarget.User);
+                        Environment.SetEnvironmentVariable("GHOST_INSTALL", installPath); // Current process
+
                     #endregion
 
                     #region Display success message
-                    AnsiConsole.MarkupLine("[green]Ghost installed successfully![/]");
-                    AnsiConsole.MarkupLine($"Installation path: {installPath}");
-                    AnsiConsole.MarkupLine($"Added to PATH: {installStructure.BinDir}");
-                    AnsiConsole.MarkupLine($"Ghost apps directory: {installStructure.GhostAppsDir}");
-                    AnsiConsole.MarkupLine($"SDK libraries: {installStructure.LibsDir}");
+
+                        AnsiConsole.MarkupLine("[green]Ghost installed successfully![/]");
+                        AnsiConsole.MarkupLine($"Installation path: {installPath}");
+                        AnsiConsole.MarkupLine($"Added to PATH: {installStructure.BinDir}");
+                        AnsiConsole.MarkupLine($"Ghost apps directory: {installStructure.GhostAppsDir}");
+                        AnsiConsole.MarkupLine($"SDK libraries: {installStructure.LibsDir}");
+
                     #endregion
 
-                    return 0;
-                }
-                catch (Exception ex)
-                {
-                    AnsiConsole.MarkupLine($"[red]Error during installation:[/] {ex.Message}");
-                    if (Directory.Exists(installPath) && settings.Force)
-                    {
-                        try
-                        {
-                            _installationService.SafeDirectoryDelete(installPath);
-                            AnsiConsole.MarkupLine("[grey]Cleaned up installation directory[/]");
-                        }
-                        catch (Exception cleanupEx)
-                        {
-                            AnsiConsole.MarkupLine(
-                                $"[grey]Could not clean up installation directory: {cleanupEx.Message}[/]");
-                        }
+                        return 0;
                     }
+                    catch (Exception ex)
+                    {
+                        AnsiConsole.MarkupLine($"[red]Error during installation:[/] {ex.Message}");
+                        if (Directory.Exists(installPath) && settings.Force)
+                        {
+                            try
+                            {
+                                _installationService.SafeDirectoryDelete(installPath);
+                                AnsiConsole.MarkupLine("[grey]Cleaned up installation directory[/]");
+                            }
+                            catch (Exception cleanupEx)
+                            {
+                                AnsiConsole.MarkupLine(
+                                        $"[grey]Could not clean up installation directory: {cleanupEx.Message}[/]");
+                            }
+                        }
 
-                    return 1;
-                }
-            });
+                        return 1;
+                    }
+                });
+    }
+
+    public class Settings : CommandSettings
+    {
+        [CommandOption("--force"), Description("Force installation even if Ghost is already installed")]
+        public bool Force { get; set; }
+
+        [CommandOption("--path"), Description("Custom installation path")]
+        public string? CustomInstallPath { get; set; }
+
+        [CommandOption("--repair"), Description("Repair existing installation")]
+        public bool Repair { get; set; }
     }
 }
-
-
-
 /// <summary>
-/// Service for handling Ghost installation
+///     Service for handling Ghost installation
 /// </summary>
 public class InstallationService
 {
-    /// <summary>
-    /// Installation directory structure
-    /// </summary>
-    public class InstallStructure
-    {
-        public string InstallPath { get; set; }
-        public string BinDir { get; set; }
-        public string GhostAppsDir { get; set; }
-        public string LibsDir { get; set; }
-        public string TemplatesDir { get; set; }
-    }
 
     /// <summary>
-    /// Creates the necessary installation directories
+    ///     Creates the necessary installation directories
     /// </summary>
     public InstallStructure CreateInstallationDirectories(string installPath)
     {
@@ -165,10 +163,10 @@ public class InstallationService
         Directory.CreateDirectory(installPath);
 
         // Create subdirectories
-        var binDir = Path.Combine(installPath, "bin");
-        var ghostAppsDir = Path.Combine(installPath, "ghosts");
-        var libsDir = Path.Combine(installPath, "libs");
-        var templatesDir = Path.Combine(installPath, "templates");
+        string? binDir = Path.Combine(installPath, "bin");
+        string? ghostAppsDir = Path.Combine(installPath, "ghosts");
+        string? libsDir = Path.Combine(installPath, "libs");
+        string? templatesDir = Path.Combine(installPath, "templates");
 
         Directory.CreateDirectory(binDir);
         Directory.CreateDirectory(ghostAppsDir);
@@ -177,26 +175,26 @@ public class InstallationService
 
         return new InstallStructure
         {
-            InstallPath = installPath,
-            BinDir = binDir,
-            GhostAppsDir = ghostAppsDir,
-            LibsDir = libsDir,
-            TemplatesDir = templatesDir
+                InstallPath = installPath,
+                BinDir = binDir,
+                GhostAppsDir = ghostAppsDir,
+                LibsDir = libsDir,
+                TemplatesDir = templatesDir
         };
     }
 
     /// <summary>
-    /// Copies executable files from the current directory to the installation directory
+    ///     Copies executable files from the current directory to the installation directory
     /// </summary>
     public async Task CopyExecutableFilesAsync(string binDir, StatusContext ctx)
     {
-        var executablePath = Process.GetCurrentProcess().MainModule?.FileName;
+        string? executablePath = Process.GetCurrentProcess().MainModule?.FileName;
         if (executablePath == null)
         {
             throw new GhostException("Could not determine executable path", ErrorCode.InstallationError);
         }
 
-        var sourceDir = Path.GetDirectoryName(executablePath);
+        string? sourceDir = Path.GetDirectoryName(executablePath);
         if (sourceDir == null)
         {
             throw new GhostException("Could not determine source directory", ErrorCode.InstallationError);
@@ -206,9 +204,9 @@ public class InstallationService
         await CopyFilesAsync(sourceDir, binDir, ctx);
 
         // Copy and rename Ghost.Father.exe to ghost.exe
-        var ghostExeName = OperatingSystem.IsWindows() ? "ghost.exe" : "ghost";
-        var sourceExe = executablePath;
-        var targetExe = Path.Combine(binDir, ghostExeName);
+        string? ghostExeName = OperatingSystem.IsWindows() ? "ghost.exe" : "ghost";
+        string? sourceExe = executablePath;
+        string? targetExe = Path.Combine(binDir, ghostExeName);
         ctx.Status($"Creating {ghostExeName}...");
         await CopyFileAsync(sourceExe, targetExe);
 
@@ -220,32 +218,32 @@ public class InstallationService
     }
 
     /// <summary>
-    /// Returns the default installation path based on the platform
+    ///     Returns the default installation path based on the platform
     /// </summary>
     public string GetDefaultInstallPath()
     {
         if (OperatingSystem.IsWindows())
         {
             // Windows: Use LocalApplicationData
-            var localAppData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+            string? localAppData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
             return Path.Combine(localAppData, "Ghost");
         }
-        else if (OperatingSystem.IsMacOS())
+        if (OperatingSystem.IsMacOS())
         {
             // macOS: Use user's Library folder
-            var homeDir = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+            string? homeDir = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
             return Path.Combine(homeDir, "Library", "Application Support", "Ghost");
         }
         else
         {
             // Linux: Use standard ~/.local/share
-            var homeDir = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+            string? homeDir = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
             return Path.Combine(homeDir, ".local", "share", "Ghost");
         }
     }
 
     /// <summary>
-    /// Safely deletes a directory, attempting alternative methods if standard deletion fails
+    ///     Safely deletes a directory, attempting alternative methods if standard deletion fails
     /// </summary>
     public void SafeDirectoryDelete(string path)
     {
@@ -264,42 +262,90 @@ public class InstallationService
             if (OperatingSystem.IsWindows())
             {
                 // On Windows, use cmd to delete
-                var psi = new ProcessStartInfo
+                ProcessStartInfo? psi = new ProcessStartInfo
                 {
-                    FileName = "cmd.exe",
-                    Arguments = $"/C rd /S /Q \"{path}\"",
-                    UseShellExecute = false,
-                    CreateNoWindow = true
+                        FileName = "cmd.exe",
+                        Arguments = $"/C rd /S /Q \"{path}\"",
+                        UseShellExecute = false,
+                        CreateNoWindow = true
                 };
-                var process = Process.Start(psi);
+                Process? process = Process.Start(psi);
                 process?.WaitForExit();
             }
             else
             {
                 // On Linux/macOS, use rm command
-                var psi = new ProcessStartInfo
+                ProcessStartInfo? psi = new ProcessStartInfo
                 {
-                    FileName = "rm",
-                    Arguments = $"-rf \"{path}\"",
-                    UseShellExecute = false,
-                    CreateNoWindow = true
+                        FileName = "rm",
+                        Arguments = $"-rf \"{path}\"",
+                        UseShellExecute = false,
+                        CreateNoWindow = true
                 };
-                var process = Process.Start(psi);
+                Process? process = Process.Start(psi);
                 process?.WaitForExit();
             }
         }
     }
 
-    #region File Operations
+    /// <summary>
+    ///     Makes a file executable on Unix systems
+    /// </summary>
+    public async Task MakeFileExecutableAsync(string filePath)
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        try
+        {
+            ProcessStartInfo? psi = new ProcessStartInfo
+            {
+                    FileName = "chmod",
+                    Arguments = $"+x \"{filePath}\"",
+                    UseShellExecute = false,
+                    CreateNoWindow = true
+            };
+
+            Process? process = Process.Start(psi);
+            if (process != null)
+            {
+                await process.WaitForExitAsync();
+                if (process.ExitCode != 0)
+                {
+                    G.LogWarn($"Failed to set executable permissions on {filePath}");
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            G.LogWarn($"Could not set executable permissions: {ex.Message}");
+        }
+    }
+    /// <summary>
+    ///     Installation directory structure
+    /// </summary>
+    public class InstallStructure
+    {
+        public string InstallPath { get; set; }
+        public string BinDir { get; set; }
+        public string GhostAppsDir { get; set; }
+        public string LibsDir { get; set; }
+        public string TemplatesDir { get; set; }
+    }
+
+#region File Operations
+
     public async Task CopyFilesAsync(string sourceDir, string targetDir, StatusContext ctx)
     {
         // Create the target directory
         Directory.CreateDirectory(targetDir);
 
         // Copy all DLLs and dependent files
-        foreach (var file in Directory.GetFiles(sourceDir))
+        foreach (string? file in Directory.GetFiles(sourceDir))
         {
-            var fileName = Path.GetFileName(file);
+            string? fileName = Path.GetFileName(file);
 
             // Skip files we don't want to copy
             if (fileName.Equals("Ghost.Father.exe", StringComparison.OrdinalIgnoreCase) ||
@@ -310,14 +356,14 @@ public class InstallationService
             }
 
             ctx.Status($"Copying {fileName}...");
-            var targetPath = Path.Combine(targetDir, fileName);
+            string? targetPath = Path.Combine(targetDir, fileName);
             await CopyFileAsync(file, targetPath);
         }
 
         // Copy dependency directories (skip Templates, we'll handle that separately)
-        foreach (var dir in Directory.GetDirectories(sourceDir))
+        foreach (string? dir in Directory.GetDirectories(sourceDir))
         {
-            var dirName = Path.GetFileName(dir);
+            string? dirName = Path.GetFileName(dir);
 
             // Skip templates directory
             if (dirName.Equals("Templates", StringComparison.OrdinalIgnoreCase) ||
@@ -326,7 +372,7 @@ public class InstallationService
                 continue;
             }
 
-            var targetPath = Path.Combine(targetDir, dirName);
+            string? targetPath = Path.Combine(targetDir, dirName);
             ctx.Status($"Copying directory: {dirName}...");
             await CopyDirectoryAsync(dir, targetPath);
         }
@@ -338,16 +384,16 @@ public class InstallationService
         Directory.CreateDirectory(targetDir);
 
         // Copy all files
-        foreach (var file in Directory.GetFiles(sourceDir))
+        foreach (string? file in Directory.GetFiles(sourceDir))
         {
-            var targetFile = Path.Combine(targetDir, Path.GetFileName(file));
+            string? targetFile = Path.Combine(targetDir, Path.GetFileName(file));
             await CopyFileAsync(file, targetFile);
         }
 
         // Copy all subdirectories recursively
-        foreach (var dir in Directory.GetDirectories(sourceDir))
+        foreach (string? dir in Directory.GetDirectories(sourceDir))
         {
-            var targetSubDir = Path.Combine(targetDir, Path.GetFileName(dir));
+            string? targetSubDir = Path.Combine(targetDir, Path.GetFileName(dir));
             await CopyDirectoryAsync(dir, targetSubDir);
         }
     }
@@ -364,23 +410,23 @@ public class InstallationService
             try
             {
                 // Try to copy with file sharing to prevent locks
-                await using var sourceStream = new FileStream(
-                    sourcePath,
-                    FileMode.Open,
-                    FileAccess.Read,
-                    FileShare.ReadWrite, // Allow reading while file is in use
-                    bufferSize,
-                    true);
+                await using FileStream? sourceStream = new FileStream(
+                        sourcePath,
+                        FileMode.Open,
+                        FileAccess.Read,
+                        FileShare.ReadWrite, // Allow reading while file is in use
+                        bufferSize,
+                        true);
 
                 // Create temp file first, then move to target
-                var tempFilePath = $"{targetPath}.tmp";
-                await using (var targetStream = new FileStream(
-                                 tempFilePath,
-                                 FileMode.Create,
-                                 FileAccess.Write,
-                                 FileShare.None,
-                                 bufferSize,
-                                 true))
+                string? tempFilePath = $"{targetPath}.tmp";
+                await using (FileStream? targetStream = new FileStream(
+                        tempFilePath,
+                        FileMode.Create,
+                        FileAccess.Write,
+                        FileShare.None,
+                        bufferSize,
+                        true))
                 {
                     await sourceStream.CopyToAsync(targetStream);
                 }
@@ -469,28 +515,28 @@ public class InstallationService
             // Try PowerShell or other command-line tools
             if (OperatingSystem.IsWindows())
             {
-                var psi = new ProcessStartInfo
+                ProcessStartInfo? psi = new ProcessStartInfo
                 {
-                    FileName = "powershell",
-                    Arguments = $"-Command \"Copy-Item -Path '{sourcePath}' -Destination '{targetPath}' -Force\"",
-                    UseShellExecute = false,
-                    CreateNoWindow = true
+                        FileName = "powershell",
+                        Arguments = $"-Command \"Copy-Item -Path '{sourcePath}' -Destination '{targetPath}' -Force\"",
+                        UseShellExecute = false,
+                        CreateNoWindow = true
                 };
-                var process = Process.Start(psi);
+                Process? process = Process.Start(psi);
                 process?.WaitForExit();
                 return process?.ExitCode == 0;
             }
             else
             {
                 // For Linux/macOS, try cp command
-                var psi = new ProcessStartInfo
+                ProcessStartInfo? psi = new ProcessStartInfo
                 {
-                    FileName = "cp",
-                    Arguments = $"-f \"{sourcePath}\" \"{targetPath}\"",
-                    UseShellExecute = false,
-                    CreateNoWindow = true
+                        FileName = "cp",
+                        Arguments = $"-f \"{sourcePath}\" \"{targetPath}\"",
+                        UseShellExecute = false,
+                        CreateNoWindow = true
                 };
-                var process = Process.Start(psi);
+                Process? process = Process.Start(psi);
                 process?.WaitForExit();
                 return process?.ExitCode == 0;
             }
@@ -500,50 +546,16 @@ public class InstallationService
             return false;
         }
     }
-    #endregion
 
-    /// <summary>
-    /// Makes a file executable on Unix systems
-    /// </summary>
-    public async Task MakeFileExecutableAsync(string filePath)
-    {
-        if (OperatingSystem.IsWindows())
-            return;
-
-        try
-        {
-            var psi = new ProcessStartInfo
-            {
-                FileName = "chmod",
-                Arguments = $"+x \"{filePath}\"",
-                UseShellExecute = false,
-                CreateNoWindow = true
-            };
-
-            var process = Process.Start(psi);
-            if (process != null)
-            {
-                await process.WaitForExitAsync();
-                if (process.ExitCode != 0)
-                {
-                    G.LogWarn($"Failed to set executable permissions on {filePath}");
-                }
-            }
-        }
-        catch (Exception ex)
-        {
-            G.LogWarn($"Could not set executable permissions: {ex.Message}");
-        }
-    }
+#endregion
 }
-
 /// <summary>
-/// Handles environment configuration for Ghost installation
+///     Handles environment configuration for Ghost installation
 /// </summary>
 public class EnvironmentSetup
 {
     /// <summary>
-    /// Updates PATH and shell configuration to make the ghost command available
+    ///     Updates PATH and shell configuration to make the ghost command available
     /// </summary>
     public async Task UpdatePathAndShellConfigAsync(string binDir)
     {
@@ -574,17 +586,17 @@ public class EnvironmentSetup
     }
 
     /// <summary>
-    /// Updates the PATH environment variable to include the Ghost bin directory
+    ///     Updates the PATH environment variable to include the Ghost bin directory
     /// </summary>
     private async Task UpdatePathAsync(string binDir)
     {
         // Add the bin directory to the system PATH
-        var envTarget = EnvironmentVariableTarget.User;
-        var currentPath = Environment.GetEnvironmentVariable("PATH", envTarget) ?? "";
+        EnvironmentVariableTarget envTarget = EnvironmentVariableTarget.User;
+        string? currentPath = Environment.GetEnvironmentVariable("PATH", envTarget) ?? "";
 
         if (!currentPath.Split(Path.PathSeparator).Contains(binDir, StringComparer.OrdinalIgnoreCase))
         {
-            var newPath = currentPath + Path.PathSeparator + binDir;
+            string? newPath = currentPath + Path.PathSeparator + binDir;
             Environment.SetEnvironmentVariable("PATH", newPath, envTarget);
 
             // Also update current process PATH
@@ -595,13 +607,13 @@ public class EnvironmentSetup
     }
 
     /// <summary>
-    /// Adds the bin directory to the user's shell profile for immediate use
+    ///     Adds the bin directory to the user's shell profile for immediate use
     /// </summary>
     private async Task AddToShellProfileAsync(string binDir)
     {
         // Determine which shell the user is likely using
-        var shell = Environment.GetEnvironmentVariable("SHELL") ?? "";
-        var homeDir = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+        string? shell = Environment.GetEnvironmentVariable("SHELL") ?? "";
+        string? homeDir = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
         string profilePath = null;
 
         // Default to zsh for macOS, which is the default since Catalina
@@ -613,21 +625,23 @@ public class EnvironmentSetup
         {
             profilePath = Path.Combine(homeDir, ".bash_profile");
             if (!File.Exists(profilePath))
+            {
                 profilePath = Path.Combine(homeDir, ".bashrc");
+            }
         }
 
         // If we can't determine the shell profile, just return
         if (profilePath == null || !File.Exists(profilePath))
         {
-            G.LogWarn($"Could not determine shell profile to update. Manual PATH update may be needed.");
+            G.LogWarn("Could not determine shell profile to update. Manual PATH update may be needed.");
             return;
         }
 
         try
         {
             // Check if the line already exists to avoid duplicates
-            var profileContent = await File.ReadAllTextAsync(profilePath);
-            var exportLine = $"export PATH=\"$PATH:{binDir}\"";
+            string? profileContent = await File.ReadAllTextAsync(profilePath);
+            string? exportLine = $"export PATH=\"$PATH:{binDir}\"";
 
             if (!profileContent.Contains(binDir))
             {
@@ -644,13 +658,13 @@ public class EnvironmentSetup
         // Also create or update a script in the bin directory that can be sourced directly
         try
         {
-            var ghostEnvScript = Path.Combine(binDir, "ghost-env.sh");
+            string? ghostEnvScript = Path.Combine(binDir, "ghost-env.sh");
             await File.WriteAllTextAsync(ghostEnvScript,
-                $"#!/bin/sh\n\n" +
-                $"# Ghost environment setup script\n" +
-                $"export GHOST_INSTALL=\"{Path.GetDirectoryName(binDir)}\"\n" +
-                $"export PATH=\"$PATH:{binDir}\"\n\n" +
-                $"echo \"Ghost environment variables set. You can now use the 'ghost' command.\"\n");
+                    $"#!/bin/sh\n\n" +
+                    $"# Ghost environment setup script\n" +
+                    $"export GHOST_INSTALL=\"{Path.GetDirectoryName(binDir)}\"\n" +
+                    $"export PATH=\"$PATH:{binDir}\"\n\n" +
+                    $"echo \"Ghost environment variables set. You can now use the 'ghost' command.\"\n");
 
             // Make it executable
             await MakeFileExecutableAsync(ghostEnvScript);
@@ -664,24 +678,26 @@ public class EnvironmentSetup
     }
 
     /// <summary>
-    /// Makes a file executable on Unix systems
+    ///     Makes a file executable on Unix systems
     /// </summary>
     private async Task MakeFileExecutableAsync(string filePath)
     {
         if (OperatingSystem.IsWindows())
+        {
             return;
+        }
 
         try
         {
-            var psi = new ProcessStartInfo
+            ProcessStartInfo? psi = new ProcessStartInfo
             {
-                FileName = "chmod",
-                Arguments = $"+x \"{filePath}\"",
-                UseShellExecute = false,
-                CreateNoWindow = true
+                    FileName = "chmod",
+                    Arguments = $"+x \"{filePath}\"",
+                    UseShellExecute = false,
+                    CreateNoWindow = true
             };
 
-            var process = Process.Start(psi);
+            Process? process = Process.Start(psi);
             if (process != null)
             {
                 await process.WaitForExitAsync();
@@ -697,15 +713,13 @@ public class EnvironmentSetup
         }
     }
 }
-
-
 /// <summary>
-/// Handles building the Ghost SDK libraries
+///     Handles building the Ghost SDK libraries
 /// </summary>
 public class SdkBuildService
 {
     /// <summary>
-    /// Builds the SDK and Core libraries and places them in the libs directory
+    ///     Builds the SDK and Core libraries and places them in the libs directory
     /// </summary>
     public async Task<bool> BuildSdkLibrariesAsync(string libsDir, StatusContext ctx)
     {
@@ -721,7 +735,7 @@ public class SdkBuildService
 
             // Find the projects
             ctx.Status("Locating project files...");
-            var (coreProjPath, sdkProjPath) = FindProjectPaths();
+            (string? coreProjPath, string? sdkProjPath) = FindProjectPaths();
 
             if (coreProjPath == null || sdkProjPath == null)
             {
@@ -764,19 +778,19 @@ public class SdkBuildService
     }
 
     /// <summary>
-    /// Finds the project file paths
+    ///     Finds the project file paths
     /// </summary>
     private (string coreProjPath, string sdkProjPath) FindProjectPaths()
     {
         // Find the actual project files relative to the executing assembly
-        var executablePath = Process.GetCurrentProcess().MainModule?.FileName;
+        string? executablePath = Process.GetCurrentProcess().MainModule?.FileName;
         if (executablePath == null)
         {
             G.LogError("Failed to determine executable path");
             return (null, null);
         }
 
-        var sourceDir = Path.GetDirectoryName(executablePath);
+        string? sourceDir = Path.GetDirectoryName(executablePath);
         if (sourceDir == null)
         {
             G.LogError("Failed to determine source directory");
@@ -784,7 +798,7 @@ public class SdkBuildService
         }
 
         // Look for the solution directory
-        var solutionDir = FindSolutionDirectory(sourceDir);
+        string? solutionDir = FindSolutionDirectory(sourceDir);
         if (solutionDir == null)
         {
             G.LogError("Could not find solution directory");
@@ -794,8 +808,8 @@ public class SdkBuildService
         G.LogInfo($"Found solution directory: {solutionDir}");
 
         // Find project paths
-        var coreProjPath = Path.Combine(solutionDir, "Ghost.Core", "Ghost.Core.csproj");
-        var sdkProjPath = Path.Combine(solutionDir, "Ghost.SDK", "Ghost.SDK.csproj");
+        string? coreProjPath = Path.Combine(solutionDir, "Ghost.Core", "Ghost.Core.csproj");
+        string? sdkProjPath = Path.Combine(solutionDir, "Ghost.SDK", "Ghost.SDK.csproj");
 
         if (!File.Exists(coreProjPath))
         {
@@ -813,11 +827,11 @@ public class SdkBuildService
     }
 
     /// <summary>
-    /// Finds the solution directory by searching up from the given directory
+    ///     Finds the solution directory by searching up from the given directory
     /// </summary>
     private string FindSolutionDirectory(string startDir)
     {
-        var currentDir = startDir;
+        string? currentDir = startDir;
 
         // Look up the directory tree
         while (currentDir != null)
@@ -842,23 +856,23 @@ public class SdkBuildService
         // If we can't find the solution directory, try standard paths
         G.LogWarn("Solution directory not found via traversaG. Checking standard paths...");
 
-        var baseDir = startDir;
+        string? baseDir = startDir;
 
         // Check standard paths relative to bin/Debug or bin/Release
-        var possiblePaths = new[]
+        string[]? possiblePaths = new[]
         {
-            Path.Combine(baseDir, "..", "..", ".."), // For bin/Debug/net9.0
-            Path.Combine(baseDir, "..", "..", "..", ".."), // For bin/Debug
-            Path.Combine(baseDir, "..", ".."), // For published app
-            Path.Combine(baseDir, "..", "..", "..", "..", ".."), // For test runners
-            baseDir // Current directory
+                Path.Combine(baseDir, "..", "..", ".."), // For bin/Debug/net9.0
+                Path.Combine(baseDir, "..", "..", "..", ".."), // For bin/Debug
+                Path.Combine(baseDir, "..", ".."), // For published app
+                Path.Combine(baseDir, "..", "..", "..", "..", ".."), // For test runners
+                baseDir // Current directory
         };
 
-        foreach (var path in possiblePaths)
+        foreach (string? path in possiblePaths)
         {
             try
             {
-                var fullPath = Path.GetFullPath(path);
+                string? fullPath = Path.GetFullPath(path);
                 if (Directory.Exists(Path.Combine(fullPath, "Ghost.Core")) &&
                     Directory.Exists(Path.Combine(fullPath, "Ghost.SDK")))
                 {
@@ -875,24 +889,27 @@ public class SdkBuildService
     }
 
     /// <summary>
-    /// Checks if the dotnet command is available on the system
+    ///     Checks if the dotnet command is available on the system
     /// </summary>
     private async Task<bool> IsDotnetAvailableAsync()
     {
         try
         {
-            var psi = new ProcessStartInfo
+            ProcessStartInfo? psi = new ProcessStartInfo
             {
-                FileName = "dotnet",
-                Arguments = "--version",
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                UseShellExecute = false,
-                CreateNoWindow = true
+                    FileName = "dotnet",
+                    Arguments = "--version",
+                    RedirectStandardOutput = true,
+                    RedirectStandardError = true,
+                    UseShellExecute = false,
+                    CreateNoWindow = true
             };
 
-            var process = Process.Start(psi);
-            if (process == null) return false;
+            Process? process = Process.Start(psi);
+            if (process == null)
+            {
+                return false;
+            }
 
             await process.WaitForExitAsync();
             return process.ExitCode == 0;
@@ -904,7 +921,7 @@ public class SdkBuildService
     }
 
     /// <summary>
-    /// Builds a project using dotnet CLI with platform-specific adaptations
+    ///     Builds a project using dotnet CLI with platform-specific adaptations
     /// </summary>
     private async Task<bool> BuildProjectAsync(string projectDir, string projectFile)
     {
@@ -918,50 +935,51 @@ public class SdkBuildService
             }
 
             // Create the process start info
-            var psi = new ProcessStartInfo
+            ProcessStartInfo? psi = new ProcessStartInfo
             {
-                FileName = "dotnet",
-                Arguments = $"build \"{projectFile}\" -c Release",
-                WorkingDirectory = projectDir,
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                UseShellExecute = false,
-                CreateNoWindow = true
+                    FileName = "dotnet",
+                    Arguments = $"build \"{projectFile}\" -c Release",
+                    WorkingDirectory = projectDir,
+                    RedirectStandardOutput = true,
+                    RedirectStandardError = true,
+                    UseShellExecute = false,
+                    CreateNoWindow = true
             };
 
             // On macOS/Linux, we need to ensure PATH is correctly set
             if (!OperatingSystem.IsWindows())
             {
                 // Copy the current process environment
-                var pathEnv = Environment.GetEnvironmentVariable("PATH") ?? "";
+                string? pathEnv = Environment.GetEnvironmentVariable("PATH") ?? "";
 
                 // Add additional common .NET SDK locations on Unix systems
-                var additionalPaths = new[]
+                string[]? additionalPaths = new[]
                 {
-                    "/usr/local/share/dotnet",
-                    "/usr/local/bin",
-                    "/usr/bin",
-                    "/opt/homebrew/bin", // For macOS with Homebrew
-                    $"{Environment.GetFolderPath(Environment.SpecialFolder.UserProfile)}/.dotnet/tools"
+                        "/usr/local/share/dotnet", "/usr/local/bin",
+                        "/usr/bin", "/opt/homebrew/bin", // For macOS with Homebrew
+                        $"{Environment.GetFolderPath(Environment.SpecialFolder.UserProfile)}/.dotnet/tools"
                 };
 
-                var newPath = string.Join(Path.PathSeparator,
-                    new[] { pathEnv }.Concat(additionalPaths.Where(Directory.Exists)));
+                string? newPath = string.Join(Path.PathSeparator,
+                        new[]
+                        {
+                                pathEnv
+                        }.Concat(additionalPaths.Where(Directory.Exists)));
 
                 psi.EnvironmentVariables["PATH"] = newPath;
             }
 
             G.LogInfo($"Building project: dotnet {psi.Arguments} in {projectDir}");
 
-            var process = Process.Start(psi);
+            Process? process = Process.Start(psi);
             if (process == null)
             {
                 G.LogError($"Failed to start dotnet build process for {projectDir}");
                 return false;
             }
 
-            var output = await process.StandardOutput.ReadToEndAsync();
-            var error = await process.StandardError.ReadToEndAsync();
+            string? output = await process.StandardOutput.ReadToEndAsync();
+            string? error = await process.StandardError.ReadToEndAsync();
 
             await process.WaitForExitAsync();
 
@@ -983,7 +1001,7 @@ public class SdkBuildService
     }
 
     /// <summary>
-    /// Creates minimal SDK implementations when the build process fails
+    ///     Creates minimal SDK implementations when the build process fails
     /// </summary>
     private async Task CreateMinimalSdkImplementationsAsync(string libsDir, StatusContext ctx)
     {
@@ -1009,10 +1027,14 @@ when minimal implementations are used.
 
             // Create empty placeholder DLLs if they don't exist
             if (!File.Exists(Path.Combine(libsDir, "Ghost.Core.dll")))
+            {
                 await File.WriteAllBytesAsync(Path.Combine(libsDir, "Ghost.Core.dll"), new byte[1024]);
+            }
 
             if (!File.Exists(Path.Combine(libsDir, "Ghost.SDK.dll")))
+            {
                 await File.WriteAllBytesAsync(Path.Combine(libsDir, "Ghost.SDK.dll"), new byte[1024]);
+            }
 
             // Create dependencies.txt file with explanation
             await File.WriteAllTextAsync(Path.Combine(libsDir, "dependencies.txt"), @"

@@ -1,34 +1,33 @@
 // src/Ghost/Templates/DotNetHelper.cs
-using Ghost.Exceptions;
-using Scriban;
 using System.Diagnostics;
 using System.Text.RegularExpressions;
-
+using Ghost.Exceptions;
+using Scriban;
 namespace Ghost.Templates;
 
-public static class DotNetHelper 
+public static class DotNetHelper
 {
     public static async Task<bool> IsPackageInstalledAsync(string packageName)
     {
-        try 
+        try
         {
-            var process = new Process
+            Process? process = new Process
             {
-                StartInfo = new ProcessStartInfo
-                {
-                    FileName = "dotnet",
-                    Arguments = OperatingSystem.IsWindows() 
-                        ? $"list package | findstr {packageName}"
-                        : $"list package | grep {packageName}",
-                    RedirectStandardOutput = true,
-                    UseShellExecute = false,
-                    CreateNoWindow = true
-                }
+                    StartInfo = new ProcessStartInfo
+                    {
+                            FileName = "dotnet",
+                            Arguments = OperatingSystem.IsWindows()
+                                    ? $"list package | findstr {packageName}"
+                                    : $"list package | grep {packageName}",
+                            RedirectStandardOutput = true,
+                            UseShellExecute = false,
+                            CreateNoWindow = true
+                    }
             };
 
             process.Start();
             await process.WaitForExitAsync();
-            var output = await process.StandardOutput.ReadToEndAsync();
+            string? output = await process.StandardOutput.ReadToEndAsync();
             return !string.IsNullOrWhiteSpace(output);
         }
         catch (Exception ex)
@@ -39,24 +38,24 @@ public static class DotNetHelper
     }
 
     public static async Task AddPackageAsync(
-        string projectPath,
-        string packageName,
-        string version)
+            string projectPath,
+            string packageName,
+            string version)
     {
-        try 
+        try
         {
-            var process = new Process
+            Process? process = new Process
             {
-                StartInfo = new ProcessStartInfo
-                {
-                    FileName = "dotnet",
-                    Arguments = $"add \"{projectPath}\" package {packageName} -v {version}",
-                    RedirectStandardOutput = true,
-                    RedirectStandardError = true,
-                    UseShellExecute = false,
-                    CreateNoWindow = true,
-                    WorkingDirectory = projectPath
-                }
+                    StartInfo = new ProcessStartInfo
+                    {
+                            FileName = "dotnet",
+                            Arguments = $"add \"{projectPath}\" package {packageName} -v {version}",
+                            RedirectStandardOutput = true,
+                            RedirectStandardError = true,
+                            UseShellExecute = false,
+                            CreateNoWindow = true,
+                            WorkingDirectory = projectPath
+                    }
             };
 
             process.Start();
@@ -64,10 +63,10 @@ public static class DotNetHelper
 
             if (process.ExitCode != 0)
             {
-                var error = await process.StandardError.ReadToEndAsync();
+                string? error = await process.StandardError.ReadToEndAsync();
                 throw new GhostException(
-                    $"Failed to add package {packageName}: {error}",
-                    ErrorCode.TemplateError);
+                        $"Failed to add package {packageName}: {error}",
+                        ErrorCode.TemplateError);
             }
 
             G.LogInfo($"Added package {packageName} v{version}");
@@ -76,9 +75,9 @@ public static class DotNetHelper
         {
             G.LogError(ex, "Error adding package: {Package}", packageName);
             throw new GhostException(
-                $"Failed to add package {packageName}", 
-                ex,
-                ErrorCode.TemplateError);
+                    $"Failed to add package {packageName}",
+                    ex,
+                    ErrorCode.TemplateError);
         }
     }
 
@@ -86,16 +85,16 @@ public static class DotNetHelper
     {
         try
         {
-            var process = new Process
+            Process? process = new Process
             {
-                StartInfo = new ProcessStartInfo
-                {
-                    FileName = "dotnet",
-                    Arguments = "--version",
-                    RedirectStandardOutput = true,
-                    UseShellExecute = false,
-                    CreateNoWindow = true
-                }
+                    StartInfo = new ProcessStartInfo
+                    {
+                            FileName = "dotnet",
+                            Arguments = "--version",
+                            RedirectStandardOutput = true,
+                            UseShellExecute = false,
+                            CreateNoWindow = true
+                    }
             };
 
             process.Start();
@@ -110,23 +109,23 @@ public static class DotNetHelper
 
     //TODO possible useful stuff to use later
     public static async Task<bool> CreateProjectAsync(
-        string projectPath,
-        string projectName,
-        string template = "console")
+            string projectPath,
+            string projectName,
+            string template = "console")
     {
         try
         {
-            var process = new Process
+            Process? process = new Process
             {
-                StartInfo = new ProcessStartInfo
-                {
-                    FileName = "dotnet",
-                    Arguments = $"new {template} -n {projectName} -o \"{projectPath}\"",
-                    RedirectStandardOutput = true,
-                    RedirectStandardError = true,
-                    UseShellExecute = false,
-                    CreateNoWindow = true
-                }
+                    StartInfo = new ProcessStartInfo
+                    {
+                            FileName = "dotnet",
+                            Arguments = $"new {template} -n {projectName} -o \"{projectPath}\"",
+                            RedirectStandardOutput = true,
+                            RedirectStandardError = true,
+                            UseShellExecute = false,
+                            CreateNoWindow = true
+                    }
             };
 
             process.Start();
@@ -134,10 +133,10 @@ public static class DotNetHelper
 
             if (process.ExitCode != 0)
             {
-                var error = await process.StandardError.ReadToEndAsync();
+                string? error = await process.StandardError.ReadToEndAsync();
                 throw new GhostException(
-                    $"Failed to create project: {error}",
-                    ErrorCode.TemplateError);
+                        $"Failed to create project: {error}",
+                        ErrorCode.TemplateError);
             }
 
             return true;
@@ -146,9 +145,9 @@ public static class DotNetHelper
         {
             G.LogError(ex, "Error creating project: {Project}", projectName);
             throw new GhostException(
-                $"Failed to create project {projectName}",
-                ex,
-                ErrorCode.TemplateError);
+                    $"Failed to create project {projectName}",
+                    ex,
+                    ErrorCode.TemplateError);
         }
     }
 
@@ -156,18 +155,18 @@ public static class DotNetHelper
     {
         try
         {
-            var process = new Process
+            Process? process = new Process
             {
-                StartInfo = new ProcessStartInfo
-                {
-                    FileName = "dotnet",
-                    Arguments = "build",
-                    RedirectStandardOutput = true,
-                    RedirectStandardError = true,
-                    UseShellExecute = false,
-                    CreateNoWindow = true,
-                    WorkingDirectory = projectPath
-                }
+                    StartInfo = new ProcessStartInfo
+                    {
+                            FileName = "dotnet",
+                            Arguments = "build",
+                            RedirectStandardOutput = true,
+                            RedirectStandardError = true,
+                            UseShellExecute = false,
+                            CreateNoWindow = true,
+                            WorkingDirectory = projectPath
+                    }
             };
 
             process.Start();
@@ -175,10 +174,10 @@ public static class DotNetHelper
 
             if (process.ExitCode != 0)
             {
-                var error = await process.StandardError.ReadToEndAsync();
+                string? error = await process.StandardError.ReadToEndAsync();
                 throw new GhostException(
-                    $"Build failed: {error}",
-                    ErrorCode.TemplateError);
+                        $"Build failed: {error}",
+                        ErrorCode.TemplateError);
             }
 
             return true;
@@ -187,9 +186,9 @@ public static class DotNetHelper
         {
             G.LogError(ex, "Error building project at: {Path}", projectPath);
             throw new GhostException(
-                $"Failed to build project",
-                ex,
-                ErrorCode.TemplateError);
+                    "Failed to build project",
+                    ex,
+                    ErrorCode.TemplateError);
         }
     }
 
@@ -197,24 +196,24 @@ public static class DotNetHelper
     {
         try
         {
-            var process = new Process
+            Process? process = new Process
             {
-                StartInfo = new ProcessStartInfo
-                {
-                    FileName = "dotnet",
-                    Arguments = $"list package {packageName}",
-                    RedirectStandardOutput = true,
-                    UseShellExecute = false,
-                    CreateNoWindow = true
-                }
+                    StartInfo = new ProcessStartInfo
+                    {
+                            FileName = "dotnet",
+                            Arguments = $"list package {packageName}",
+                            RedirectStandardOutput = true,
+                            UseShellExecute = false,
+                            CreateNoWindow = true
+                    }
             };
 
             process.Start();
-            var output = await process.StandardOutput.ReadToEndAsync();
+            string? output = await process.StandardOutput.ReadToEndAsync();
             await process.WaitForExitAsync();
 
             // Parse version from output
-            var versionMatch = Regex.Match(output, $@"{packageName}\s+(\d+\.\d+\.\d+)");
+            Match? versionMatch = Regex.Match(output, $@"{packageName}\s+(\d+\.\d+\.\d+)");
             return versionMatch.Success ? versionMatch.Groups[1].Value : null;
         }
         catch (Exception ex)
@@ -225,26 +224,28 @@ public static class DotNetHelper
     }
 
     public static async Task ApplyTemplateAsync(
-        string projectPath,
-        string templatePath,
-        Dictionary<string, object> variables)
+            string projectPath,
+            string templatePath,
+            Dictionary<string, object> variables)
     {
         if (!Directory.Exists(templatePath))
+        {
             throw new DirectoryNotFoundException($"Template path not found: {templatePath}");
+        }
 
         // Copy template files
-        foreach (var file in Directory.GetFiles(templatePath, "*.*", SearchOption.AllDirectories))
+        foreach (string? file in Directory.GetFiles(templatePath, "*.*", SearchOption.AllDirectories))
         {
-            var relativePath = Path.GetRelativePath(templatePath, file);
-            var targetPath = Path.Combine(projectPath, relativePath);
+            string? relativePath = Path.GetRelativePath(templatePath, file);
+            string? targetPath = Path.Combine(projectPath, relativePath);
 
             // Process file name if it contains template variables
             if (relativePath.Contains("{{") && relativePath.Contains("}}"))
             {
-                var template = Template.Parse(relativePath);
+                Template? template = Template.Parse(relativePath);
                 targetPath = Path.Combine(
-                    projectPath,
-                    template.Render(variables));
+                        projectPath,
+                        template.Render(variables));
             }
 
             // Ensure target directory exists
@@ -253,11 +254,11 @@ public static class DotNetHelper
             // Process file content if it's a template
             if (Path.GetExtension(file) == ".tpl")
             {
-                var content = await File.ReadAllTextAsync(file);
-                var template = Template.Parse(content);
+                string? content = await File.ReadAllTextAsync(file);
+                Template? template = Template.Parse(content);
                 await File.WriteAllTextAsync(
-                    targetPath[..^4], // Remove .tpl
-                    template.Render(variables));
+                        targetPath[..^4], // Remove .tpl
+                        template.Render(variables));
             }
             else
             {

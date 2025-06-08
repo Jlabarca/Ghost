@@ -311,3 +311,4 @@
 //   Task<IEnumerable<StateEntry>> GetHistoryAsync(string key, int limit = 10);
 //   event EventHandler<StateChangedEventArgs> StateChanged;
 // }
+

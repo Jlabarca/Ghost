@@ -9,13 +9,17 @@ public abstract class ModuleConfig
 
     public virtual IEnumerable<string> Validate()
     {
-        if (!Enabled) yield break;
+        if (!Enabled)
+        {
+            yield break;
+        }
 
         if (string.IsNullOrEmpty(Provider))
+        {
             yield return $"Provider must be specified for {GetType().Name}";
+        }
     }
 }
-
 public interface IGhostModule
 {
     string Name { get; }

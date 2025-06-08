@@ -1,39 +1,17 @@
-using Ghost;
+using System.ComponentModel;
 using Ghost.Storage;
 using Spectre.Console;
 using Spectre.Console.Cli;
-using System.ComponentModel;
-using System.IO;
-
 namespace Ghost.Father.CLI.Commands;
 
 public class RunCommand : AsyncCommand<RunCommand.Settings>
 {
-    private readonly IGhostBus _bus;
     private const string GHOSTS_FOLDER = "ghosts";
+    private readonly IGhostBus _bus;
 
     public RunCommand(IGhostBus bus)
     {
         _bus = bus;
-    }
-
-    public class Settings : CommandSettings
-    {
-        [CommandArgument(0, "[name]")]
-        [Description("Name of the Ghost app to run")]
-        public string Name { get; set; }
-
-        [CommandOption("--args")]
-        [Description("Arguments to pass to the app")]
-        public string Args { get; set; }
-
-        [CommandOption("--watch")]
-        [Description("Watch for changes and restart the app")]
-        public bool Watch { get; set; }
-
-        [CommandOption("--env")]
-        [Description("Environment variables in format KEY=VALUE")]
-        public string[] Environment { get; set; }
     }
 
     public override async Task<int> ExecuteAsync(CommandContext context, Settings settings)
@@ -47,11 +25,11 @@ public class RunCommand : AsyncCommand<RunCommand.Settings>
         try
         {
             // Get the ghost installation directory
-            var ghostInstallDir = GetGhostInstallDirectory();
+            string? ghostInstallDir = GetGhostInstallDirectory();
 
             // Locate the app in the ghosts folder
-            var ghostsFolder = Path.Combine(ghostInstallDir, GHOSTS_FOLDER);
-            var appFolder = Path.Combine(ghostsFolder, settings.Name);
+            string? ghostsFolder = Path.Combine(ghostInstallDir, GHOSTS_FOLDER);
+            string? appFolder = Path.Combine(ghostsFolder, settings.Name);
 
             if (!Directory.Exists(appFolder))
             {
@@ -60,25 +38,25 @@ public class RunCommand : AsyncCommand<RunCommand.Settings>
             }
 
             // Prepare the command to send to the daemon
-            var command = new SystemCommand
+            SystemCommand? command = new SystemCommand
             {
-                CommandId = Guid.NewGuid().ToString(),
-                CommandType = "run",
-                Parameters = new Dictionary<string, string>
-                {
-                    ["appId"] = settings.Name,
-                    ["appPath"] = appFolder,
-                    ["args"] = settings.Args ?? string.Empty,
-                    ["watch"] = settings.Watch.ToString()
-                }
+                    CommandId = Guid.NewGuid().ToString(),
+                    CommandType = "run",
+                    Parameters = new Dictionary<string, string>
+                    {
+                            ["appId"] = settings.Name,
+                            ["appPath"] = appFolder,
+                            ["args"] = settings.Args ?? string.Empty,
+                            ["watch"] = settings.Watch.ToString()
+                    }
             };
 
             // Add environment variables
             if (settings.Environment != null)
             {
-                foreach (var env in settings.Environment)
+                foreach (string? env in settings.Environment)
                 {
-                    var parts = env.Split('=', 2);
+                    string[]? parts = env.Split('=', 2);
                     if (parts.Length == 2)
                     {
                         command.Parameters[$"env:{parts[0]}"] = parts[1];
@@ -93,7 +71,7 @@ public class RunCommand : AsyncCommand<RunCommand.Settings>
             var responseReceived = new TaskCompletionSource<bool>();
             try
             {
-                await foreach (var response in _bus.SubscribeAsync<CommandResponse>("ghost:responses"))
+                await foreach (CommandResponse? response in _bus.SubscribeAsync<CommandResponse>("ghost:responses"))
                 {
                     if (response.CommandId == command.CommandId)
                     {
@@ -144,23 +122,24 @@ public class RunCommand : AsyncCommand<RunCommand.Settings>
     private async Task ShowMonitoringStatus(string appName)
     {
         // Subscribe to metrics for this app
-        var metricChannel = $"ghost:metrics:{appName}";
+        string? metricChannel = $"ghost:metrics:{appName}";
 
         AnsiConsole.MarkupLine($"[blue]Monitoring app:[/] {appName}");
         AnsiConsole.MarkupLine("[grey]Press Ctrl+C to exit[/]");
 
-        var cts = new CancellationTokenSource();
-        Console.CancelKeyPress += (s, e) => {
+        CancellationTokenSource? cts = new CancellationTokenSource();
+        Console.CancelKeyPress += (s, e) =>
+        {
             e.Cancel = true;
             cts.Cancel();
         };
 
         var lastMetrics = new Dictionary<string, object>();
-        var startTime = DateTime.UtcNow;
+        DateTime startTime = DateTime.UtcNow;
 
         try
         {
-            await foreach (var metrics in _bus.SubscribeAsync<dynamic>(metricChannel, cts.Token))
+            await foreach (dynamic? metrics in _bus.SubscribeAsync<dynamic>(metricChannel, cts.Token))
             {
                 if (metrics != null)
                 {
@@ -170,7 +149,7 @@ public class RunCommand : AsyncCommand<RunCommand.Settings>
                     AnsiConsole.MarkupLine("[grey]Press Ctrl+C to exit[/]");
 
                     // Display metrics
-                    var table = new Table().Border(TableBorder.Rounded);
+                    Table? table = new Table().Border(TableBorder.Rounded);
                     table.AddColumn("Metric");
                     table.AddColumn("Value");
 
@@ -199,20 +178,30 @@ public class RunCommand : AsyncCommand<RunCommand.Settings>
         if (value is double d)
         {
             if (d > 1_000_000)
+            {
                 return $"{d / 1_000_000:N2} M";
+            }
             if (d > 1_000)
+            {
                 return $"{d / 1_000:N2} K";
+            }
             return $"{d:N2}";
         }
 
         if (value is long l)
         {
             if (l > 1_000_000_000)
+            {
                 return $"{l / 1_000_000_000:N2} GB";
+            }
             if (l > 1_000_000)
+            {
                 return $"{l / 1_000_000:N2} MB";
+            }
             if (l > 1_000)
+            {
                 return $"{l / 1_000:N2} KB";
+            }
             return $"{l:N0}";
         }
 
@@ -222,15 +211,15 @@ public class RunCommand : AsyncCommand<RunCommand.Settings>
     private string GetGhostInstallDirectory()
     {
         // First check the environment variable
-        var envDir = Environment.GetEnvironmentVariable("GHOST_INSTALL");
+        string? envDir = Environment.GetEnvironmentVariable("GHOST_INSTALL");
         if (!string.IsNullOrEmpty(envDir) && Directory.Exists(envDir))
         {
             return envDir;
         }
 
         // Fall back to local application data
-        var localAppData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
-        var ghostDir = Path.Combine(localAppData, "Ghost");
+        string? localAppData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+        string? ghostDir = Path.Combine(localAppData, "Ghost");
 
         // Create if it doesn't exist
         if (!Directory.Exists(ghostDir))
@@ -239,5 +228,20 @@ public class RunCommand : AsyncCommand<RunCommand.Settings>
         }
 
         return ghostDir;
+    }
+
+    public class Settings : CommandSettings
+    {
+        [CommandArgument(0, "[name]"), Description("Name of the Ghost app to run")]
+        public string Name { get; set; }
+
+        [CommandOption("--args"), Description("Arguments to pass to the app")]
+        public string Args { get; set; }
+
+        [CommandOption("--watch"), Description("Watch for changes and restart the app")]
+        public bool Watch { get; set; }
+
+        [CommandOption("--env"), Description("Environment variables in format KEY=VALUE")]
+        public string[] Environment { get; set; }
     }
 }

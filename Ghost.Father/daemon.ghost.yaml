@@ -3,8 +3,8 @@ app:
 redis:
   enabled: true               # Override base
   database: 1                 # Override base
-  # Inherits all other Redis settings from base
+    # Inherits all other Redis settings from base
 
-# cli.ghost.yaml (150 lines - only overrides)
-          # CLI-specific feature
+    # cli.ghost.yaml (150 lines - only overrides)
+  # CLI-specific feature
   # Inherits ALL other settings from base

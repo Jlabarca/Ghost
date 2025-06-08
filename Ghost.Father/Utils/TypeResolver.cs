@@ -1,6 +1,6 @@
-using Spectre.Console.Cli;
+using System.Reflection;
 using System.Text;
-
+using Spectre.Console.Cli;
 namespace Ghost.Father.CLI;
 
 public class TypeResolver : ITypeResolver, IDisposable
@@ -14,6 +14,15 @@ public class TypeResolver : ITypeResolver, IDisposable
         _resolutionStack = new HashSet<Type>();
     }
 
+
+    public void Dispose()
+    {
+        if (_provider is IDisposable disposable)
+        {
+            disposable.Dispose();
+        }
+    }
+
     public object Resolve(Type type)
     {
         if (!_resolutionStack.Add(type))
@@ -21,26 +30,26 @@ public class TypeResolver : ITypeResolver, IDisposable
             throw new InvalidOperationException($"Circular dependency detected: {type.Name}");
         }
 
-        var obj = ResolveInternal(type);
+        object? obj = ResolveInternal(type);
         _resolutionStack.Remove(type);
         return obj;
     }
 
     private object ResolveInternal(Type type)
     {
-        var service = _provider.GetService(type);
+        object? service = _provider.GetService(type);
         if (service != null)
         {
             return service;
         }
 
-        var error = new StringBuilder();
+        StringBuilder? error = new StringBuilder();
         error.AppendLine($"Failed to resolve type: {type.FullName}");
         error.AppendLine($"Dependency chain: {string.Join(" -> ", _resolutionStack)}");
 
-        var constructor = type.GetConstructors()
-            .OrderByDescending(c => c.GetParameters().Length)
-            .FirstOrDefault();
+        ConstructorInfo? constructor = type.GetConstructors()
+                .OrderByDescending(c => c.GetParameters().Length)
+                .FirstOrDefault();
 
         if (constructor == null)
         {
@@ -49,10 +58,10 @@ public class TypeResolver : ITypeResolver, IDisposable
         }
 
         error.AppendLine("\nConstructor dependencies:");
-        foreach (var param in constructor.GetParameters())
+        foreach (ParameterInfo? param in constructor.GetParameters())
         {
-            var parameterType = param.ParameterType;
-            var isRegistered = _provider.GetService(parameterType) != null;  // Check directly
+            Type? parameterType = param.ParameterType;
+            bool isRegistered = _provider.GetService(parameterType) != null; // Check directly
             error.AppendLine($"  - {parameterType.Name}: {(isRegistered ? "✓" : "✗")}");
 
             if (!isRegistered)
@@ -62,7 +71,7 @@ public class TypeResolver : ITypeResolver, IDisposable
         }
 
         error.AppendLine("\nRegistration suggestions:");
-        foreach (var param in constructor.GetParameters())
+        foreach (ParameterInfo? param in constructor.GetParameters())
         {
             if (_provider.GetService(param.ParameterType) == null)
             {
@@ -80,39 +89,33 @@ public class TypeResolver : ITypeResolver, IDisposable
 
     private void AppendDependencyInfo(StringBuilder error, Type parameterType)
     {
-        var paramConstructor = parameterType.GetConstructors()
-            .OrderByDescending(c => c.GetParameters().Length)
-            .FirstOrDefault();
+        ConstructorInfo? paramConstructor = parameterType.GetConstructors()
+                .OrderByDescending(c => c.GetParameters().Length)
+                .FirstOrDefault();
 
-        if (paramConstructor == null) return; // No constructor, nothing to add
+        if (paramConstructor == null)
+        {
+            return; // No constructor, nothing to add
+        }
 
         error.AppendLine($"    {parameterType.Name}'s dependencies:");
-        foreach (var subParam in paramConstructor.GetParameters())
+        foreach (ParameterInfo? subParam in paramConstructor.GetParameters())
         {
-            var subIsRegistered = _provider.GetService(subParam.ParameterType) != null;
+            bool subIsRegistered = _provider.GetService(subParam.ParameterType) != null;
             error.AppendLine($"      - {subParam.ParameterType.Name}: {(subIsRegistered ? "✓" : "✗")}");
         }
     }
 
-    private void AppendImplementations(StringBuilder error, Type interfaceType, System.Reflection.Assembly assembly)
+    private void AppendImplementations(StringBuilder error, Type interfaceType, Assembly assembly)
     {
         var implementations = assembly.GetTypes()
-            .Where(t => !t.IsAbstract && interfaceType.IsAssignableFrom(t))
-            .Take(3);
+                .Where(t => !t.IsAbstract && interfaceType.IsAssignableFrom(t))
+                .Take(3);
 
-        foreach (var impl in implementations)
+        foreach (Type? impl in implementations)
         {
-            error.AppendLine($"  // Or with implementation:");
+            error.AppendLine("  // Or with implementation:");
             error.AppendLine($"  services.AddTransient<{interfaceType.Name}, {impl.Name}>();");
-        }
-    }
-
-
-    public void Dispose()
-    {
-        if (_provider is IDisposable disposable)
-        {
-            disposable.Dispose();
         }
     }
 }

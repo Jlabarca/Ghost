@@ -1,28 +1,41 @@
+using System.Collections.Concurrent;
+using System.Runtime.CompilerServices;
+using System.Text.Json;
 using Ghost.Data;
 using Microsoft.Extensions.Logging;
 using Spectre.Console;
-using System.Collections.Concurrent;
-using System.Text.Json;
-using System.Runtime.CompilerServices;
-
 namespace Ghost.Logging;
 
 public class SpectreGhostLogger : IGhostLogger
 {
-    private readonly string _processId;
-    private readonly GhostLoggerConfiguration _config;
-    private ICache _cache;
-    private readonly ConcurrentQueue<LogEntry> _redisBuffer;
-    private readonly SemaphoreSlim _logLock = new(1, 1);
-    private static readonly Dictionary<LogLevel, Color> LogLevelColors = new()
+    private static readonly Dictionary<LogLevel, Color> LogLevelColors = new Dictionary<LogLevel, Color>
     {
-        { LogLevel.Trace, Color.Grey },
-        { LogLevel.Debug, Color.Blue },
-        { LogLevel.Information, Color.Green },
-        { LogLevel.Warning, Color.Yellow },
-        { LogLevel.Error, Color.Red },
-        { LogLevel.Critical, Color.Red1 }
+            {
+                    LogLevel.Trace, Color.Grey
+            },
+            {
+                    LogLevel.Debug, Color.Blue
+            },
+            {
+                    LogLevel.Information, Color.Green
+            },
+            {
+                    LogLevel.Warning, Color.Yellow
+            },
+            {
+                    LogLevel.Error, Color.Red
+            },
+            {
+                    LogLevel.Critical, Color.Red1
+            }
     };
+
+    private static readonly ConcurrentDictionary<string, DateTime> LastCleanupTime = new ConcurrentDictionary<string, DateTime>();
+    private readonly GhostLoggerConfiguration _config;
+    private readonly SemaphoreSlim _logLock = new SemaphoreSlim(1, 1);
+    private readonly string _processId;
+    private readonly ConcurrentQueue<LogEntry> _redisBuffer;
+    private ICache _cache;
 
     public SpectreGhostLogger(ICache cache, GhostLoggerConfiguration config)
     {
@@ -46,7 +59,10 @@ public class SpectreGhostLogger : IGhostLogger
         AnsiConsole.MarkupLine($"[bold green]Log level set to {logLevel}[/]");
     }
 
-    public IDisposable? BeginScope<TState>(TState state) where TState : notnull => default;
+    public IDisposable? BeginScope<TState>(TState state) where TState : notnull
+    {
+        return default(IDisposable?);
+    }
 
     public bool IsEnabled(LogLevel logLevel)
     {
@@ -56,7 +72,9 @@ public class SpectreGhostLogger : IGhostLogger
     public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter)
     {
         if (!IsEnabled(logLevel))
+        {
             return;
+        }
 
         string message = formatter(state, exception);
         string sourceFile = "";
@@ -74,34 +92,36 @@ public class SpectreGhostLogger : IGhostLogger
 
     // Use this method for direct logging
     public void LogWithSource(
-        string message,
-        LogLevel level = LogLevel.Information,
-        Exception? exception = null,
-        [CallerFilePath] string sourceFilePath = "",
-        [CallerLineNumber] int sourceLineNumber = 0)
+            string message,
+            LogLevel level = LogLevel.Information,
+            Exception? exception = null,
+            [CallerFilePath] string sourceFilePath = "",
+            [CallerLineNumber] int sourceLineNumber = 0)
     {
         if (!IsEnabled(level))
+        {
             return;
+        }
 
         LogInternal(message, level, exception, sourceFilePath, sourceLineNumber);
     }
 
     private void LogInternal(
-        string message,
-        LogLevel level,
-        Exception? exception,
-        string sourceFilePath,
-        int sourceLineNumber)
+            string message,
+            LogLevel level,
+            Exception? exception,
+            string sourceFilePath,
+            int sourceLineNumber)
     {
-        var entry = new LogEntry
+        LogEntry? entry = new LogEntry
         {
-            Timestamp = DateTime.UtcNow,
-            Level = level,
-            Message = message,
-            Exception = exception?.ToString(),
-            ProcessId = _processId,
-            SourceFilePath = sourceFilePath,
-            SourceLineNumber = sourceLineNumber
+                Timestamp = DateTime.UtcNow,
+                Level = level,
+                Message = message,
+                Exception = exception?.ToString(),
+                ProcessId = _processId,
+                SourceFilePath = sourceFilePath,
+                SourceLineNumber = sourceLineNumber
         };
 
         // Log to console with formatting
@@ -143,35 +163,15 @@ public class SpectreGhostLogger : IGhostLogger
         }
     }
 
-    private interface ILogState
-    {
-        string SourceFilePath { get; }
-        int SourceLineNumber { get; }
-    }
-
-    private class SourceLogState<T> : ILogState
-    {
-        public T State { get; }
-        public string SourceFilePath { get; }
-        public int SourceLineNumber { get; }
-
-        public SourceLogState(T state, string sourceFilePath, int sourceLineNumber)
-        {
-            State = state;
-            SourceFilePath = sourceFilePath;
-            SourceLineNumber = sourceLineNumber;
-        }
-    }
-
     private void LogToConsole(LogEntry entry)
     {
-        var color = LogLevelColors.GetValueOrDefault(entry.Level, Color.White);
-        var timestamp = entry.Timestamp.ToString("HH:mm:ss.fff");
-        var logLevel = entry.Level.ToString().ToUpper().PadRight(9);
+        Color color = LogLevelColors.GetValueOrDefault(entry.Level, Color.White);
+        string? timestamp = entry.Timestamp.ToString("HH:mm:ss.fff");
+        string? logLevel = entry.Level.ToString().ToUpper().PadRight(9);
 
         // Format file path as a clickable link
         string clickableFilePath = FormatClickableFilePath(entry.SourceFilePath, entry.SourceLineNumber);
-        var logMessage = $"{timestamp} {logLevel} {entry.Message} {clickableFilePath}";
+        string? logMessage = $"{timestamp} {logLevel} {entry.Message} {clickableFilePath}";
 
         AnsiConsole.Write(new Text(logMessage, new Style(foreground: color)));
         AnsiConsole.WriteLine();
@@ -180,24 +180,23 @@ public class SpectreGhostLogger : IGhostLogger
     private string FormatClickableFilePath(string filePath, int lineNumber)
     {
         if (string.IsNullOrWhiteSpace(filePath))
+        {
             return "";
+        }
 
         string fileName = Path.GetFileName(filePath);
         if (IsRiderInstalled())
         {
             return $"\u001b]8;;rider://open/?file={filePath.Replace("\\", "/")}&{lineNumber}\u001b\\{fileName}:{lineNumber}\u001b]8;;\u001b\\";
         }
-        else
-        {
-            return $"\u001b]8;;file:///{filePath.Replace("\\", "/")}\u001b\\{fileName}:{lineNumber}\u001b]8;;\u001b\\";
-        }
+        return $"\u001b]8;;file:///{filePath.Replace("\\", "/")}\u001b\\{fileName}:{lineNumber}\u001b]8;;\u001b\\";
     }
 
     private bool IsRiderInstalled()
     {
         string jetBrainsPath = Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-            "JetBrains"
+                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                "JetBrains"
         );
         return Directory.Exists(jetBrainsPath) &&
                Directory.GetFiles(jetBrainsPath, "Rider*.exe", SearchOption.AllDirectories).Any();
@@ -207,8 +206,8 @@ public class SpectreGhostLogger : IGhostLogger
     {
         try
         {
-            var key = $"{_config.RedisKeyPrefix}:{_processId}";
-            var serialized = JsonSerializer.Serialize(entry);
+            string? key = $"{_config.RedisKeyPrefix}:{_processId}";
+            string? serialized = JsonSerializer.Serialize(entry);
 
             _redisBuffer.Enqueue(entry);
             while (_redisBuffer.Count > _config.RedisMaxLogs)
@@ -226,34 +225,40 @@ public class SpectreGhostLogger : IGhostLogger
 
     private void LogToOutputFile(LogEntry entry)
     {
-        var outputFile = Path.Combine(
-            _config.OutputsPath,
-            $"{_processId}_output.log"
+        string? outputFile = Path.Combine(
+                _config.OutputsPath,
+                $"{_processId}_output.log"
         );
 
-        File.AppendAllLines(outputFile, new[] { FormatLogLine(entry) });
+        File.AppendAllLines(outputFile, new[]
+        {
+                FormatLogLine(entry)
+        });
     }
 
     private void LogToErrorFile(LogEntry entry)
     {
-        var errorFile = Path.Combine(
-            _config.LogsPath,
-            $"{DateTime.UtcNow:yyyyMMdd}_errors.log"
+        string? errorFile = Path.Combine(
+                _config.LogsPath,
+                $"{DateTime.UtcNow:yyyyMMdd}_errors.log"
         );
 
-        File.AppendAllLines(errorFile, new[] { FormatLogLine(entry) });
+        File.AppendAllLines(errorFile, new[]
+        {
+                FormatLogLine(entry)
+        });
     }
 
     private string FormatLogLine(LogEntry entry)
     {
-        var locationInfo = "";
+        string? locationInfo = "";
         if (_config.ShowSourceLocation && !string.IsNullOrEmpty(entry.SourceFilePath))
         {
-            var fileName = Path.GetFileName(entry.SourceFilePath);
+            string? fileName = Path.GetFileName(entry.SourceFilePath);
             locationInfo = $" [{fileName}:{entry.SourceLineNumber}]";
         }
 
-        var line = $"{entry.Timestamp:yyyy-MM-dd HH:mm:ss.fff} [{entry.Level}]{locationInfo} {entry.Message}";
+        string? line = $"{entry.Timestamp:yyyy-MM-dd HH:mm:ss.fff} [{entry.Level}]{locationInfo} {entry.Message}";
         if (entry.Exception != null)
         {
             line += Environment.NewLine + entry.Exception;
@@ -263,8 +268,11 @@ public class SpectreGhostLogger : IGhostLogger
 
     private void CleanupIfNeeded()
     {
-        var lastCleanup = LastCleanupTime.GetOrAdd(_processId, DateTime.UtcNow);
-        if (DateTime.UtcNow - lastCleanup < TimeSpan.FromMinutes(5)) return;
+        DateTime lastCleanup = LastCleanupTime.GetOrAdd(_processId, DateTime.UtcNow);
+        if (DateTime.UtcNow - lastCleanup < TimeSpan.FromMinutes(5))
+        {
+            return;
+        }
 
         try
         {
@@ -281,20 +289,26 @@ public class SpectreGhostLogger : IGhostLogger
     private void CleanupDirectory(string path, long maxSizeBytes)
     {
         var files = Directory.GetFiles(path)
-            .Select(f => new FileInfo(f))
-            .OrderByDescending(f => f.CreationTime)
-            .ToList();
+                .Select(f => new FileInfo(f))
+                .OrderByDescending(f => f.CreationTime)
+                .ToList();
 
-        var totalSize = files.Sum(f => f.Length);
-        if (totalSize <= maxSizeBytes) return;
+        long totalSize = files.Sum(f => f.Length);
+        if (totalSize <= maxSizeBytes)
+        {
+            return;
+        }
 
-        foreach (var file in files.Skip(_config.MaxFilesPerDirectory))
+        foreach (FileInfo? file in files.Skip(_config.MaxFilesPerDirectory))
         {
             try
             {
                 file.Delete();
                 totalSize -= file.Length;
-                if (totalSize <= maxSizeBytes) break;
+                if (totalSize <= maxSizeBytes)
+                {
+                    break;
+                }
             }
             catch
             {
@@ -303,5 +317,23 @@ public class SpectreGhostLogger : IGhostLogger
         }
     }
 
-    private static readonly ConcurrentDictionary<string, DateTime> LastCleanupTime = new();
+    private interface ILogState
+    {
+        string SourceFilePath { get; }
+        int SourceLineNumber { get; }
+    }
+
+    private class SourceLogState<T> : ILogState
+    {
+
+        public SourceLogState(T state, string sourceFilePath, int sourceLineNumber)
+        {
+            State = state;
+            SourceFilePath = sourceFilePath;
+            SourceLineNumber = sourceLineNumber;
+        }
+        public T State { get; }
+        public string SourceFilePath { get; }
+        public int SourceLineNumber { get; }
+    }
 }

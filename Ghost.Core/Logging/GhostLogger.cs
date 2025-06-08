@@ -1,34 +1,47 @@
-using Ghost.Data;
-using Microsoft.Extensions.Logging;
 using System.Collections.Concurrent;
 using System.Runtime.CompilerServices;
 using System.Text.Json;
-
+using Ghost.Data;
+using Microsoft.Extensions.Logging;
 namespace Ghost.Logging;
 
 /// <summary>
-/// DEFAULT Base implementation of Ghost logger without external UI dependencies
+///     DEFAULT Base implementation of Ghost logger without external UI dependencies
 /// </summary>
 public class GhostLogger : ILogger
 {
-    private readonly string _processId;
-    private readonly GhostLoggerConfiguration _config;
-    protected ICache _cache;
-    private readonly ConcurrentQueue<LogEntry> _redisBuffer;
-    private readonly SemaphoreSlim _logLock = new(1, 1);
 
     /// <summary>
-    /// Dictionary mapping log levels to their string representations
+    ///     Dictionary mapping log levels to their string representations
     /// </summary>
-    protected static readonly Dictionary<LogLevel, string> LogLevelNames = new()
+    protected static readonly Dictionary<LogLevel, string> LogLevelNames = new Dictionary<LogLevel, string>
     {
-        { LogLevel.Trace, "TRACE" },
-        { LogLevel.Debug, "DEBUG" },
-        { LogLevel.Information, "INFO" },
-        { LogLevel.Warning, "WARN" },
-        { LogLevel.Error, "ERROR" },
-        { LogLevel.Critical, "CRIT" }
+            {
+                    LogLevel.Trace, "TRACE"
+            },
+            {
+                    LogLevel.Debug, "DEBUG"
+            },
+            {
+                    LogLevel.Information, "INFO"
+            },
+            {
+                    LogLevel.Warning, "WARN"
+            },
+            {
+                    LogLevel.Error, "ERROR"
+            },
+            {
+                    LogLevel.Critical, "CRIT"
+            }
     };
+
+    private static readonly ConcurrentDictionary<string, DateTime> LastCleanupTime = new ConcurrentDictionary<string, DateTime>();
+    private readonly GhostLoggerConfiguration _config;
+    private readonly SemaphoreSlim _logLock = new SemaphoreSlim(1, 1);
+    private readonly string _processId;
+    private readonly ConcurrentQueue<LogEntry> _redisBuffer;
+    protected ICache _cache;
 
     public GhostLogger(ICache cache, GhostLoggerConfiguration config)
     {
@@ -41,12 +54,10 @@ public class GhostLogger : ILogger
         Directory.CreateDirectory(_config.OutputsPath);
     }
 
-    public void SetCache(ICache cache)
+    public IDisposable? BeginScope<TState>(TState state) where TState : notnull
     {
-        _cache = cache;
+        return default(IDisposable?);
     }
-
-    public IDisposable? BeginScope<TState>(TState state) where TState : notnull => default;
 
     public bool IsEnabled(LogLevel logLevel)
     {
@@ -55,7 +66,10 @@ public class GhostLogger : ILogger
 
     public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter)
     {
-        if (!IsEnabled(logLevel)) return;
+        if (!IsEnabled(logLevel))
+        {
+            return;
+        }
 
         string message = formatter(state, exception);
         string sourceFile = "";
@@ -71,34 +85,42 @@ public class GhostLogger : ILogger
         LogInternal(message, logLevel, exception, sourceFile, sourceLine);
     }
 
+    public void SetCache(ICache cache)
+    {
+        _cache = cache;
+    }
+
     // Use this method for direct logging
     public void LogWithSource(
-        string message,
-        LogLevel level = LogLevel.Information,
-        Exception? exception = null,
-        [CallerFilePath] string sourceFilePath = "",
-        [CallerLineNumber] int sourceLineNumber = 0)
+            string message,
+            LogLevel level = LogLevel.Information,
+            Exception? exception = null,
+            [CallerFilePath] string sourceFilePath = "",
+            [CallerLineNumber] int sourceLineNumber = 0)
     {
-        if (!IsEnabled(level)) return;
+        if (!IsEnabled(level))
+        {
+            return;
+        }
         LogInternal(message, level, exception, sourceFilePath, sourceLineNumber);
     }
 
     protected virtual void LogInternal(
-        string message,
-        LogLevel level,
-        Exception? exception,
-        string sourceFilePath,
-        int sourceLineNumber)
+            string message,
+            LogLevel level,
+            Exception? exception,
+            string sourceFilePath,
+            int sourceLineNumber)
     {
-        var entry = new LogEntry
+        LogEntry? entry = new LogEntry
         {
-            Timestamp = DateTime.UtcNow,
-            Level = level,
-            Message = message,
-            Exception = exception?.ToString(),
-            ProcessId = _processId,
-            SourceFilePath = sourceFilePath,
-            SourceLineNumber = sourceLineNumber
+                Timestamp = DateTime.UtcNow,
+                Level = level,
+                Message = message,
+                Exception = exception?.ToString(),
+                ProcessId = _processId,
+                SourceFilePath = sourceFilePath,
+                SourceLineNumber = sourceLineNumber
         };
 
         // Log to console (basic implementation, can be overridden)
@@ -139,13 +161,13 @@ public class GhostLogger : ILogger
     }
 
     /// <summary>
-    /// Logs a message to the console with basic formatting
+    ///     Logs a message to the console with basic formatting
     /// </summary>
     protected virtual void LogToConsole(LogEntry entry)
     {
-        var timestamp = entry.Timestamp.ToString("HH:mm:ss.fff");
-        var levelName = LogLevelNames.GetValueOrDefault(entry.Level, "UNKNOWN");
-        var logMessage = $"{timestamp} [{levelName}] {entry.Message}";
+        string? timestamp = entry.Timestamp.ToString("HH:mm:ss.fff");
+        string? levelName = LogLevelNames.GetValueOrDefault(entry.Level, "UNKNOWN");
+        string? logMessage = $"{timestamp} [{levelName}] {entry.Message}";
 
         // Add source location if available and configured
         if (_config.ShowSourceLocation && !string.IsNullOrEmpty(entry.SourceFilePath))
@@ -159,7 +181,7 @@ public class GhostLogger : ILogger
     }
 
     /// <summary>
-    /// Logs an exception to the console
+    ///     Logs an exception to the console
     /// </summary>
     protected virtual void LogExceptionToConsole(Exception exception)
     {
@@ -174,32 +196,12 @@ public class GhostLogger : ILogger
         Console.WriteLine();
     }
 
-    private interface ILogState
-    {
-        string SourceFilePath { get; }
-        int SourceLineNumber { get; }
-    }
-
-    private class SourceLogState<T> : ILogState
-    {
-        public T State { get; }
-        public string SourceFilePath { get; }
-        public int SourceLineNumber { get; }
-
-        public SourceLogState(T state, string sourceFilePath, int sourceLineNumber)
-        {
-            State = state;
-            SourceFilePath = sourceFilePath;
-            SourceLineNumber = sourceLineNumber;
-        }
-    }
-
     private async void LogToRedis(LogEntry entry)
     {
         try
         {
-            var key = $"{_config.RedisKeyPrefix}:{_processId}";
-            var serialized = JsonSerializer.Serialize(entry);
+            string? key = $"{_config.RedisKeyPrefix}:{_processId}";
+            string? serialized = JsonSerializer.Serialize(entry);
 
             _redisBuffer.Enqueue(entry);
             while (_redisBuffer.Count > _config.RedisMaxLogs)
@@ -217,34 +219,40 @@ public class GhostLogger : ILogger
 
     private void LogToOutputFile(LogEntry entry)
     {
-        var outputFile = Path.Combine(
-            _config.OutputsPath,
-            $"{_processId}_output.log"
+        string? outputFile = Path.Combine(
+                _config.OutputsPath,
+                $"{_processId}_output.log"
         );
 
-        File.AppendAllLines(outputFile, new[] { FormatLogLine(entry) });
+        File.AppendAllLines(outputFile, new[]
+        {
+                FormatLogLine(entry)
+        });
     }
 
     private void LogToErrorFile(LogEntry entry)
     {
-        var errorFile = Path.Combine(
-            _config.LogsPath,
-            $"{DateTime.UtcNow:yyyyMMdd}_errors.log"
+        string? errorFile = Path.Combine(
+                _config.LogsPath,
+                $"{DateTime.UtcNow:yyyyMMdd}_errors.log"
         );
 
-        File.AppendAllLines(errorFile, new[] { FormatLogLine(entry) });
+        File.AppendAllLines(errorFile, new[]
+        {
+                FormatLogLine(entry)
+        });
     }
 
     private string FormatLogLine(LogEntry entry)
     {
-        var locationInfo = "";
+        string? locationInfo = "";
         if (_config.ShowSourceLocation && !string.IsNullOrEmpty(entry.SourceFilePath))
         {
-            var fileName = Path.GetFileName(entry.SourceFilePath);
+            string? fileName = Path.GetFileName(entry.SourceFilePath);
             locationInfo = $" [{fileName}:{entry.SourceLineNumber}]";
         }
 
-        var line = $"{entry.Timestamp:yyyy-MM-dd HH:mm:ss.fff} [{entry.Level}]{locationInfo} {entry.Message}";
+        string? line = $"{entry.Timestamp:yyyy-MM-dd HH:mm:ss.fff} [{entry.Level}]{locationInfo} {entry.Message}";
         if (entry.Exception != null)
         {
             line += Environment.NewLine + entry.Exception;
@@ -254,8 +262,11 @@ public class GhostLogger : ILogger
 
     private void CleanupIfNeeded()
     {
-        var lastCleanup = LastCleanupTime.GetOrAdd(_processId, DateTime.UtcNow);
-        if (DateTime.UtcNow - lastCleanup < TimeSpan.FromMinutes(5)) return;
+        DateTime lastCleanup = LastCleanupTime.GetOrAdd(_processId, DateTime.UtcNow);
+        if (DateTime.UtcNow - lastCleanup < TimeSpan.FromMinutes(5))
+        {
+            return;
+        }
 
         try
         {
@@ -272,20 +283,26 @@ public class GhostLogger : ILogger
     private void CleanupDirectory(string path, long maxSizeBytes)
     {
         var files = Directory.GetFiles(path)
-            .Select(f => new FileInfo(f))
-            .OrderByDescending(f => f.CreationTime)
-            .ToList();
+                .Select(f => new FileInfo(f))
+                .OrderByDescending(f => f.CreationTime)
+                .ToList();
 
-        var totalSize = files.Sum(f => f.Length);
-        if (totalSize <= maxSizeBytes) return;
+        long totalSize = files.Sum(f => f.Length);
+        if (totalSize <= maxSizeBytes)
+        {
+            return;
+        }
 
-        foreach (var file in files.Skip(_config.MaxFilesPerDirectory))
+        foreach (FileInfo? file in files.Skip(_config.MaxFilesPerDirectory))
         {
             try
             {
                 file.Delete();
                 totalSize -= file.Length;
-                if (totalSize <= maxSizeBytes) break;
+                if (totalSize <= maxSizeBytes)
+                {
+                    break;
+                }
             }
             catch
             {
@@ -294,5 +311,23 @@ public class GhostLogger : ILogger
         }
     }
 
-    private static readonly ConcurrentDictionary<string, DateTime> LastCleanupTime = new();
+    private interface ILogState
+    {
+        string SourceFilePath { get; }
+        int SourceLineNumber { get; }
+    }
+
+    private class SourceLogState<T> : ILogState
+    {
+
+        public SourceLogState(T state, string sourceFilePath, int sourceLineNumber)
+        {
+            State = state;
+            SourceFilePath = sourceFilePath;
+            SourceLineNumber = sourceLineNumber;
+        }
+        public T State { get; }
+        public string SourceFilePath { get; }
+        public int SourceLineNumber { get; }
+    }
 }

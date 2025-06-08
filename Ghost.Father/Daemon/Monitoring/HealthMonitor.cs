@@ -1,37 +1,35 @@
-using Ghost;
-using Ghost.Storage;
-using Ghost.Father.Models;
 using System.Collections.Concurrent;
 using System.Diagnostics;
-
+using Ghost.Father.Models;
+using Ghost.Storage;
 namespace Ghost.Father;
 
 /// <summary>
-/// Monitors process health and resource usage, providing real-time metrics and status updates
+///     Monitors process health and resource usage, providing real-time metrics and status updates
 /// </summary>
 public class HealthMonitor : IAsyncDisposable
 {
     private readonly IGhostBus _bus;
-    private readonly ConcurrentDictionary<string, ProcessHealthState> _healthStates;
-    private readonly ConcurrentDictionary<string, Stopwatch> _cpuWatches;
-    private readonly Timer _healthCheckTimer;
     private readonly TimeSpan _checkInterval;
-    private readonly SemaphoreSlim _lock = new(1, 1);
-    private bool _isDisposed;
 
     // Configurable thresholds
-    private readonly double _cpuWarningThreshold;       // Percentage
-    private readonly long _memoryWarningThreshold;      // Bytes
+    private readonly double _cpuWarningThreshold; // Percentage
+    private readonly ConcurrentDictionary<string, Stopwatch> _cpuWatches;
+    private readonly Timer _healthCheckTimer;
+    private readonly ConcurrentDictionary<string, ProcessHealthState> _healthStates;
+    private readonly SemaphoreSlim _lock = new SemaphoreSlim(1, 1);
     private readonly int _maxRestartAttempts;
+    private readonly long _memoryWarningThreshold; // Bytes
     private readonly TimeSpan _restartCooldown;
+    private bool _isDisposed;
 
     public HealthMonitor(
-        IGhostBus bus,
-        double cpuWarningThreshold = 90.0,
-        long memoryWarningThreshold = 1_000_000_000,  // 1GB
-        int maxRestartAttempts = 3,
-        TimeSpan? checkInterval = null,
-        TimeSpan? restartCooldown = null)
+            IGhostBus bus,
+            double cpuWarningThreshold = 90.0,
+            long memoryWarningThreshold = 1_000_000_000, // 1GB
+            int maxRestartAttempts = 3,
+            TimeSpan? checkInterval = null,
+            TimeSpan? restartCooldown = null)
     {
         _bus = bus ?? throw new ArgumentNullException(nameof(bus));
         _healthStates = new ConcurrentDictionary<string, ProcessHealthState>();
@@ -45,6 +43,41 @@ public class HealthMonitor : IAsyncDisposable
         _restartCooldown = restartCooldown ?? TimeSpan.FromMinutes(5);
     }
 
+    public async ValueTask DisposeAsync()
+    {
+        if (_isDisposed)
+        {
+            return;
+        }
+
+        await _lock.WaitAsync();
+        try
+        {
+            if (_isDisposed)
+            {
+                return;
+            }
+            _isDisposed = true;
+
+            await _healthCheckTimer.DisposeAsync();
+
+            foreach (ProcessHealthState state in _healthStates.Values)
+            {
+                state.ProcessInfo.StatusChanged -= OnProcessStatusChanged;
+                state.ProcessInfo.OutputReceived -= OnProcessOutputReceived;
+                state.ProcessInfo.ErrorReceived -= OnProcessErrorReceived;
+            }
+
+            _healthStates.Clear();
+            _cpuWatches.Clear();
+        }
+        finally
+        {
+            _lock.Release();
+            _lock.Dispose();
+        }
+    }
+
     public Task StartMonitoringAsync(CancellationToken ct)
     {
         _healthCheckTimer.Change(TimeSpan.Zero, _checkInterval);
@@ -53,7 +86,10 @@ public class HealthMonitor : IAsyncDisposable
 
     public async Task RegisterProcessAsync(ProcessInfo process)
     {
-        if (_isDisposed) throw new ObjectDisposedException(nameof(HealthMonitor));
+        if (_isDisposed)
+        {
+            throw new ObjectDisposedException(nameof(HealthMonitor));
+        }
 
         await _lock.WaitAsync();
         try
@@ -62,19 +98,19 @@ public class HealthMonitor : IAsyncDisposable
             _cpuWatches[process.Id] = Stopwatch.StartNew();
 
             // Initialize health state
-            var healthState = new ProcessHealthState
+            ProcessHealthState healthState = new ProcessHealthState
             {
-                ProcessInfo = process,
-                LastCheck = DateTime.UtcNow,
-                LastRestart = null,
-                RestartAttempts = 0,
-                Metrics = await CollectProcessMetricsAsync(process),
-                Status = new Dictionary<string, string>
-                {
-                    ["status"] = process.Status.ToString(),
-                    ["uptime"] = process.Uptime.ToString(),
-                    ["restartCount"] = process.RestartCount.ToString()
-                }
+                    ProcessInfo = process,
+                    LastCheck = DateTime.UtcNow,
+                    LastRestart = null,
+                    RestartAttempts = 0,
+                    Metrics = await CollectProcessMetricsAsync(process),
+                    Status = new Dictionary<string, string>
+                    {
+                            ["status"] = process.Status.ToString(),
+                            ["uptime"] = process.Uptime.ToString(),
+                            ["restartCount"] = process.RestartCount.ToString()
+                    }
             };
 
             _healthStates[process.Id] = healthState;
@@ -96,26 +132,26 @@ public class HealthMonitor : IAsyncDisposable
     {
         try
         {
-            var stopwatch = _cpuWatches.GetOrAdd(process.Id, _ => Stopwatch.StartNew());
-            var cpuTime = Process.GetCurrentProcess().TotalProcessorTime;
-            var elapsedSeconds = stopwatch.Elapsed.TotalSeconds;
+            Stopwatch stopwatch = _cpuWatches.GetOrAdd(process.Id, _ => Stopwatch.StartNew());
+            TimeSpan cpuTime = Process.GetCurrentProcess().TotalProcessorTime;
+            double elapsedSeconds = stopwatch.Elapsed.TotalSeconds;
             stopwatch.Restart();
 
-            var cpuUsage = elapsedSeconds > 0
-                ? (cpuTime.TotalSeconds / (Environment.ProcessorCount * elapsedSeconds)) * 100
-                : 0;
+            double cpuUsage = elapsedSeconds > 0
+                    ? cpuTime.TotalSeconds / (Environment.ProcessorCount * elapsedSeconds) * 100
+                    : 0;
 
             return new ProcessMetrics(
-                ProcessId: process.Id,
-                CpuPercentage: Math.Round(cpuUsage, 2),
-                MemoryBytes: Process.GetCurrentProcess().WorkingSet64,
-                ThreadCount: Process.GetCurrentProcess().Threads.Count,
-                Timestamp: DateTime.UtcNow,
-                HandleCount: Process.GetCurrentProcess().HandleCount,
-                GcTotalMemory: GC.GetTotalMemory(false),
-                Gen0Collections: GC.CollectionCount(0),
-                Gen1Collections: GC.CollectionCount(1),
-                Gen2Collections: GC.CollectionCount(2)
+                    process.Id,
+                    Math.Round(cpuUsage, 2),
+                    Process.GetCurrentProcess().WorkingSet64,
+                    Process.GetCurrentProcess().Threads.Count,
+                    DateTime.UtcNow,
+                    HandleCount: Process.GetCurrentProcess().HandleCount,
+                    GcTotalMemory: GC.GetTotalMemory(false),
+                    Gen0Collections: GC.CollectionCount(0),
+                    Gen1Collections: GC.CollectionCount(1),
+                    Gen2Collections: GC.CollectionCount(2)
             );
         }
         catch (Exception ex)
@@ -127,12 +163,15 @@ public class HealthMonitor : IAsyncDisposable
 
     private async void OnHealthCheck(object? state)
     {
-        if (_isDisposed) return;
+        if (_isDisposed)
+        {
+            return;
+        }
 
         await _lock.WaitAsync();
         try
         {
-            foreach (var healthState in _healthStates.Values)
+            foreach (ProcessHealthState healthState in _healthStates.Values)
             {
                 try
                 {
@@ -141,7 +180,7 @@ public class HealthMonitor : IAsyncDisposable
                 catch (Exception ex)
                 {
                     G.LogError(ex, "Error checking health for process: {Id}",
-                        healthState.ProcessInfo.Id);
+                            healthState.ProcessInfo.Id);
                 }
             }
         }
@@ -153,13 +192,16 @@ public class HealthMonitor : IAsyncDisposable
 
     private async Task CheckProcessHealthAsync(ProcessHealthState state)
     {
-        var process = state.ProcessInfo;
+        ProcessInfo process = state.ProcessInfo;
 
         // Skip check if process is not running
-        if (!process.IsRunning) return;
+        if (!process.IsRunning)
+        {
+            return;
+        }
 
         // Collect current metrics
-        var metrics = await CollectProcessMetricsAsync(process);
+        ProcessMetrics metrics = await CollectProcessMetricsAsync(process);
         state.Metrics = metrics;
         state.LastCheck = DateTime.UtcNow;
 
@@ -220,7 +262,7 @@ public class HealthMonitor : IAsyncDisposable
             state.RestartAttempts++;
 
             G.LogWarn("Restarted process {Id} due to resource usage (attempt {Attempt}/{Max})",
-                state.ProcessInfo.Id, state.RestartAttempts, _maxRestartAttempts);
+                    state.ProcessInfo.Id, state.RestartAttempts, _maxRestartAttempts);
         }
         catch (Exception ex)
         {
@@ -230,7 +272,7 @@ public class HealthMonitor : IAsyncDisposable
 
     private void OnProcessStatusChanged(object? sender, ProcessStatusEventArgs e)
     {
-        if (sender is ProcessInfo process && _healthStates.TryGetValue(e.ProcessId, out var state))
+        if (sender is ProcessInfo process && _healthStates.TryGetValue(e.ProcessId, out ProcessHealthState? state))
         {
             state.Status["status"] = e.NewStatus.ToString();
             state.Status["statusChanged"] = e.Timestamp.ToString("o");
@@ -244,7 +286,7 @@ public class HealthMonitor : IAsyncDisposable
 
     private void OnProcessErrorReceived(object? sender, ProcessOutputEventArgs e)
     {
-        if (sender is ProcessInfo process && _healthStates.TryGetValue(process.Id, out var state))
+        if (sender is ProcessInfo process && _healthStates.TryGetValue(process.Id, out ProcessHealthState? state))
         {
             state.Status["lastError"] = e.Data;
             state.Status["lastErrorTime"] = e.Timestamp.ToString("o");
@@ -255,12 +297,12 @@ public class HealthMonitor : IAsyncDisposable
     {
         try
         {
-            var health = new ProcessHealth
+            ProcessHealth health = new ProcessHealth
             {
-                ProcessId = state.ProcessInfo.Id,
-                Metrics = state.Metrics,
-                Status = state.Status,
-                Timestamp = DateTime.UtcNow
+                    ProcessId = state.ProcessInfo.Id,
+                    Metrics = state.Metrics,
+                    Status = state.Status,
+                    Timestamp = DateTime.UtcNow
             };
 
             await _bus.PublishAsync($"ghost:health:{state.ProcessInfo.Id}", health);
@@ -268,36 +310,7 @@ public class HealthMonitor : IAsyncDisposable
         catch (Exception ex)
         {
             G.LogError(ex, "Failed to publish health update for process: {Id}",
-                state.ProcessInfo.Id);
-        }
-    }
-
-    public async ValueTask DisposeAsync()
-    {
-        if (_isDisposed) return;
-
-        await _lock.WaitAsync();
-        try
-        {
-            if (_isDisposed) return;
-            _isDisposed = true;
-
-            await _healthCheckTimer.DisposeAsync();
-
-            foreach (var state in _healthStates.Values)
-            {
-                state.ProcessInfo.StatusChanged -= OnProcessStatusChanged;
-                state.ProcessInfo.OutputReceived -= OnProcessOutputReceived;
-                state.ProcessInfo.ErrorReceived -= OnProcessErrorReceived;
-            }
-
-            _healthStates.Clear();
-            _cpuWatches.Clear();
-            _lock.Dispose();
-        }
-        finally
-        {
-            _lock.Release();
+                    state.ProcessInfo.Id);
         }
     }
 
@@ -306,7 +319,7 @@ public class HealthMonitor : IAsyncDisposable
         await _lock.WaitAsync();
         try
         {
-            foreach (var healthState in _healthStates.Values)
+            foreach (ProcessHealthState healthState in _healthStates.Values)
             {
                 try
                 {
@@ -315,7 +328,7 @@ public class HealthMonitor : IAsyncDisposable
                 catch (Exception ex)
                 {
                     G.LogError(ex, "Error checking health for process: {Id}",
-                        healthState.ProcessInfo.Id);
+                            healthState.ProcessInfo.Id);
                 }
             }
         }
@@ -325,9 +338,8 @@ public class HealthMonitor : IAsyncDisposable
         }
     }
 }
-
 /// <summary>
-/// Maintains the health state for a monitored process
+///     Maintains the health state for a monitored process
 /// </summary>
 public class ProcessHealthState
 {
@@ -336,5 +348,5 @@ public class ProcessHealthState
     public DateTime? LastRestart { get; set; }
     public int RestartAttempts { get; set; }
     public ProcessMetrics Metrics { get; set; }
-    public Dictionary<string, string> Status { get; set; } = new();
+    public Dictionary<string, string> Status { get; set; } = new Dictionary<string, string>();
 }

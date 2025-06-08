@@ -1,33 +1,32 @@
+using System.Text;
 using Ghost.Exceptions;
 using Scriban;
 using Scriban.Runtime;
-using System.Text;
-
 namespace Ghost.Templates;
 
 /// <summary>
-/// Extension methods for TemplateManager to enhance Scriban template processing
+///     Extension methods for TemplateManager to enhance Scriban template processing
 /// </summary>
 public static class TemplateManagerExtensions
 {
     /// <summary>
-    /// Creates a project from a template with additional template variables
+    ///     Creates a project from a template with additional template variables
     /// </summary>
     public static async Task<DirectoryInfo> CreateFromTemplateAsync(
-        this TemplateManager templateManager,
-        string templateName,
-        string projectName,
-        string outputPath,
-        Dictionary<string, string> additionalVariables = null)
+            this TemplateManager templateManager,
+            string templateName,
+            string projectName,
+            string outputPath,
+            Dictionary<string, string> additionalVariables = null)
     {
-        if (!templateManager.GetAvailableTemplates().TryGetValue(templateName, out var template))
+        if (!templateManager.GetAvailableTemplates().TryGetValue(templateName, out TemplateInfo? template))
         {
             throw new GhostException($"Template '{templateName}' not found", ErrorCode.TemplateNotFound);
         }
 
         // Create project directory
-        var projectDir = Directory.CreateDirectory(Path.Combine(outputPath, projectName));
-        var templateFilesPath = Path.Combine(template.TemplateRoot, "files");
+        DirectoryInfo? projectDir = Directory.CreateDirectory(Path.Combine(outputPath, projectName));
+        string? templateFilesPath = Path.Combine(template.TemplateRoot, "files");
 
         if (!Directory.Exists(templateFilesPath))
         {
@@ -41,25 +40,25 @@ public static class TemplateManagerExtensions
     }
 
     /// <summary>
-    /// Processes template files with enhanced variable support
+    ///     Processes template files with enhanced variable support
     /// </summary>
     private static async Task ProcessTemplateFilesAsync(
-        string sourcePath,
-        string targetPath,
-        string projectName,
-        TemplateInfo template,
-        Dictionary<string, string> additionalVariables)
+            string sourcePath,
+            string targetPath,
+            string projectName,
+            TemplateInfo template,
+            Dictionary<string, string> additionalVariables)
     {
         // Initialize Scriban template context
-        var templateContext = new TemplateContext();
-        var scriptObject = new ScriptObject();
+        TemplateContext? templateContext = new TemplateContext();
+        ScriptObject? scriptObject = new ScriptObject();
 
         // Add default variables
         scriptObject.Add("project_name", projectName);
         scriptObject.Add("safe_name", MakeSafeName(projectName));
 
         // Add template variables
-        foreach (var (key, value) in template.Variables)
+        foreach ((string? key, string? value) in template.Variables)
         {
             if (!scriptObject.ContainsKey(key))
             {
@@ -70,7 +69,7 @@ public static class TemplateManagerExtensions
         // Add additional variables
         if (additionalVariables != null)
         {
-            foreach (var (key, value) in additionalVariables)
+            foreach ((string? key, string? value) in additionalVariables)
             {
                 if (!scriptObject.ContainsKey(key))
                 {
@@ -82,7 +81,7 @@ public static class TemplateManagerExtensions
         // Add Ghost install directory if not already present
         if (!scriptObject.ContainsKey("ghost_install_dir"))
         {
-            var ghostInstallDir = Environment.GetEnvironmentVariable("GHOST_INSTALL") ?? "";
+            string? ghostInstallDir = Environment.GetEnvironmentVariable("GHOST_INSTALL") ?? "";
             scriptObject.Add("ghost_install_dir", ghostInstallDir);
         }
 
@@ -95,15 +94,15 @@ public static class TemplateManagerExtensions
         templateContext.PushGlobal(scriptObject);
 
         // Process each file
-        foreach (var file in Directory.GetFiles(sourcePath, "*.*", SearchOption.AllDirectories))
+        foreach (string? file in Directory.GetFiles(sourcePath, "*.*", SearchOption.AllDirectories))
         {
-            var relativePath = Path.GetRelativePath(sourcePath, file);
+            string? relativePath = Path.GetRelativePath(sourcePath, file);
 
             // Process the file path first to handle variables in the path
-            var pathTemplate = Template.Parse(relativePath);
-            var processedPath = await pathTemplate.RenderAsync(templateContext);
+            Template? pathTemplate = Template.Parse(relativePath);
+            string? processedPath = await pathTemplate.RenderAsync(templateContext);
 
-            var targetFilePath = Path.Combine(targetPath, processedPath);
+            string? targetFilePath = Path.Combine(targetPath, processedPath);
 
             // Create target directory if it doesn't exist
             Directory.CreateDirectory(Path.GetDirectoryName(targetFilePath));
@@ -111,9 +110,9 @@ public static class TemplateManagerExtensions
             // Process file content if it's a template
             if (file.EndsWith(".tpl"))
             {
-                var content = await File.ReadAllTextAsync(file);
-                var contentTemplate = Template.Parse(content);
-                var processedContent = await contentTemplate.RenderAsync(templateContext);
+                string? content = await File.ReadAllTextAsync(file);
+                Template? contentTemplate = Template.Parse(content);
+                string? processedContent = await contentTemplate.RenderAsync(templateContext);
 
                 // Remove .tpl extension
                 targetFilePath = targetFilePath[..^4];
@@ -129,17 +128,25 @@ public static class TemplateManagerExtensions
     }
 
     /// <summary>
-    /// Makes a safe name for C# identifiers
+    ///     Makes a safe name for C# identifiers
     /// </summary>
     private static string MakeSafeName(string name)
     {
-        if (string.IsNullOrEmpty(name)) return "GhostApp";
+        if (string.IsNullOrEmpty(name))
+        {
+            return "GhostApp";
+        }
 
         // Convert to PascalCase and remove invalid characters
-        var words = name.Split(new[] { ' ', '-', '_', '.', '/', '\\' }, StringSplitOptions.RemoveEmptyEntries);
+        string[]? words = name.Split(new[]
+        {
+                ' ', '-',
+                '_', '.',
+                '/', '\\'
+        }, StringSplitOptions.RemoveEmptyEntries);
 
-        var safeName = new StringBuilder();
-        foreach (var word in words)
+        StringBuilder? safeName = new StringBuilder();
+        foreach (string? word in words)
         {
             if (word.Length > 0)
             {

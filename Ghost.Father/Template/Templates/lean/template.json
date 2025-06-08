@@ -10,5 +10,9 @@
   "requiredPackages": {
     "Ghost.Core": "1.0.0"
   },
-  "tags": ["basic", "lean", "minimal"]
+  "tags": [
+    "basic",
+    "lean",
+    "minimal"
+  ]
 }

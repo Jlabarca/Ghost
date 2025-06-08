@@ -1,17 +1,17 @@
 namespace Ghost.Data;
 
 /// <summary>
-/// Information about a database column
+///     Information about a database column
 /// </summary>
 public class ColumnInfo
 {
     public ColumnInfo(
-        string name, 
-        string type, 
-        bool isNullable, 
-        bool isPrimaryKey, 
-        bool isAutoIncrement, 
-        string? defaultValue = null)
+            string name,
+            string type,
+            bool isNullable,
+            bool isPrimaryKey,
+            bool isAutoIncrement,
+            string? defaultValue = null)
     {
         Name = name;
         Type = type;

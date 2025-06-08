@@ -13,5 +13,9 @@
     "Microsoft.Extensions.DependencyInjection": "9.0.0",
     "Microsoft.Extensions.Configuration.Json": "9.0.0"
   },
-  "tags": ["one-shot", "cli", "command-line"]
+  "tags": [
+    "one-shot",
+    "cli",
+    "command-line"
+  ]
 }

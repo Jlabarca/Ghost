@@ -1,15 +1,12 @@
-using System;
+namespace Ghost.Father;
 
-namespace Ghost.Father
+[AttributeUsage(AttributeTargets.Assembly)]
+public class BuildInfoAttribute : Attribute
 {
-  [AttributeUsage(AttributeTargets.Assembly)]
-  public class BuildInfoAttribute : Attribute
-  {
-    public int BuildNumber { get; }
 
     public BuildInfoAttribute(int buildNumber)
     {
-      BuildNumber = buildNumber;
+        BuildNumber = buildNumber;
     }
-  }
+    public int BuildNumber { get; }
 }

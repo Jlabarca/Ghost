@@ -1,5 +1,4 @@
 using Ghost.Storage;
-
 namespace Ghost;
 
 public abstract partial class GhostApp
@@ -9,12 +8,12 @@ public abstract partial class GhostApp
     protected GhostFatherConnection Connection { get; private set; }
 
     /// <summary>
-    /// Event raised when connection status to GhostFather changes.
+    ///     Event raised when connection status to GhostFather changes.
     /// </summary>
     public event EventHandler<GhostFatherConnection.ConnectionStatusEventArgs> GhostFatherConnectionChanged;
 
     /// <summary>
-    /// Event raised when GhostFather connection diagnostics complete.
+    ///     Event raised when GhostFather connection diagnostics complete.
     /// </summary>
     public event EventHandler<ConnectionDiagnosticsEventArgs> GhostFatherDiagnosticsCompleted;
 
@@ -24,24 +23,24 @@ public abstract partial class GhostApp
         G.LogInfo("Attempting to initialize GhostFather connection...");
         try
         {
-            var processMetadata = new ProcessMetadata(
-                    Name: Config.App.Name ?? GetType().Name,
-                    Type: IsService ? "service" : "app",
-                    Version: Config.App.Version ?? "1.0.0",
-                    Environment: new Dictionary<string, string>(), // Populate if needed
-                    Configuration: new Dictionary<string, string>
+            ProcessMetadata? processMetadata = new ProcessMetadata(
+                    Config.App.Name ?? GetType().Name,
+                    IsService ? "service" : "app",
+                    Config.App.Version ?? "1.0.0",
+                    new Dictionary<string, string>(), // Populate if needed
+                    new Dictionary<string, string>
                     {
                             ["AppType"] = IsService ? "service" : "one-shot"
                     }
             );
 
-            var processInfo = new ProcessInfo(
-                    id: Config.App.Id,
-                    metadata: processMetadata,
-                    executablePath: Environment.ProcessPath ?? string.Empty,
-                    arguments: string.Join(" ", GetCommandLineArgsSkipFirst()),
-                    workingDirectory: Directory.GetCurrentDirectory(),
-                    environment: new Dictionary<string, string>() // Populate if needed
+            ProcessInfo? processInfo = new ProcessInfo(
+                    Config.App.Id,
+                    processMetadata,
+                    Environment.ProcessPath ?? string.Empty,
+                    string.Join(" ", GetCommandLineArgsSkipFirst()),
+                    Directory.GetCurrentDirectory(),
+                    new Dictionary<string, string>() // Populate if needed
             );
 
             // The Bus is now resolved via DI (_busLazy.Value)
@@ -52,7 +51,7 @@ public abstract partial class GhostApp
                 return;
             }
 
-            var connectionConfig = GetConnectionConfiguration(Config); // Ensure this method is accessible
+            ConnectionConfiguration? connectionConfig = GetConnectionConfiguration(Config); // Ensure this method is accessible
 
 
             // For simplicity in this refactor, directComm and diagnostics are not implemented here.
@@ -61,10 +60,10 @@ public abstract partial class GhostApp
             IConnectionDiagnostics diagnostics = connectionConfig.EnableDiagnostics ? new SimpleConnectionDiagnostics(this) : null;
 
             Connection = new GhostFatherConnection(
-                    bus: Bus, // Use the DI-resolved bus
-                    processInfo: processInfo,
-                    directComm: directComm, // Simplified for now
-                    diagnostics: diagnostics // Simplified for now
+                    Bus, // Use the DI-resolved bus
+                    processInfo,
+                    directComm, // Simplified for now
+                    diagnostics // Simplified for now
             );
 
             Connection.ConnectionStatusChanged += OnGhostFatherConnectionStatusChanged;
@@ -88,7 +87,10 @@ public abstract partial class GhostApp
                 if (Connection != null)
                 {
                     Connection.ConnectionStatusChanged -= OnGhostFatherConnectionStatusChanged;
-                    if (diagnostics != null) Connection.DiagnosticsCompleted -= OnGhostFatherDiagnosticsCompleted;
+                    if (diagnostics != null)
+                    {
+                        Connection.DiagnosticsCompleted -= OnGhostFatherDiagnosticsCompleted;
+                    }
                     await Connection.DisposeAsync();
                 }
             });
@@ -102,14 +104,20 @@ public abstract partial class GhostApp
 
     protected IEnumerable<string?> GetCommandLineArgsSkipFirst()
     {
-        var args = Environment.GetCommandLineArgs();
+        string[]? args = Environment.GetCommandLineArgs();
         return args.Length > 1 ? new ArraySegment<string>(args, 1, args.Length - 1) : Array.Empty<string>();
     }
 
     private void OnGhostFatherConnectionStatusChanged(object sender, GhostFatherConnection.ConnectionStatusEventArgs e)
     {
-        if (e.IsConnected) G.LogInfo($"GhostFather connection established for {Config.App.Id}.");
-        else G.LogWarn($"GhostFather connection lost for {Config.App.Id}: {e.ErrorMessage}");
+        if (e.IsConnected)
+        {
+            G.LogInfo($"GhostFather connection established for {Config.App.Id}.");
+        }
+        else
+        {
+            G.LogWarn($"GhostFather connection lost for {Config.App.Id}: {e.ErrorMessage}");
+        }
         GhostFatherConnectionChanged?.Invoke(this, e);
     }
 
@@ -162,34 +170,66 @@ public abstract partial class GhostApp
     // In a real app, these might be more complex or provided via DI.
     private class SimpleDirectCommunication : IDirectCommunication
     {
-        public Task<bool> TestConnectionAsync() => Task.FromResult(false); // Default to false for offline
-        public Task RegisterProcessAsync(ProcessRegistration registration) => Task.CompletedTask;
-        public Task SendEventAsync(SystemEvent systemEvent) => Task.CompletedTask;
-        public Task SendCommandAsync(SystemCommand command) => Task.CompletedTask;
-        public Task<CommandResponse> SendCommandWithResponseAsync(SystemCommand command) =>
-                Task.FromResult(new CommandResponse
-                {
-                        CommandId = command.CommandId,
-                        Success = false,
-                        Error = "Offline mode"
-                });
-        public Task SendHeartbeatAsync(HeartbeatMessage heartbeat) => Task.CompletedTask;
-        public Task SendHealthStatusAsync(HealthStatusMessage healthStatus) => Task.CompletedTask;
-        public Task SendMetricsAsync(ProcessMetrics metrics) => Task.CompletedTask;
+        public Task<bool> TestConnectionAsync()
+        {
+            return Task.FromResult(false);
+            // Default to false for offline
+        }
+        public Task RegisterProcessAsync(ProcessRegistration registration)
+        {
+            return Task.CompletedTask;
+        }
+        public Task SendEventAsync(SystemEvent systemEvent)
+        {
+            return Task.CompletedTask;
+        }
+        public Task SendCommandAsync(SystemCommand command)
+        {
+            return Task.CompletedTask;
+        }
+        public Task<CommandResponse> SendCommandWithResponseAsync(SystemCommand command)
+        {
+            return Task.FromResult(new CommandResponse
+            {
+                    CommandId = command.CommandId,
+                    Success = false,
+                    Error = "Offline mode"
+            });
+        }
+        public Task SendHeartbeatAsync(HeartbeatMessage heartbeat)
+        {
+            return Task.CompletedTask;
+        }
+        public Task SendHealthStatusAsync(HealthStatusMessage healthStatus)
+        {
+            return Task.CompletedTask;
+        }
+        public Task SendMetricsAsync(ProcessMetrics metrics)
+        {
+            return Task.CompletedTask;
+        }
     }
 
     private class SimpleConnectionDiagnostics : IConnectionDiagnostics
     {
         private readonly GhostApp _app;
         public SimpleConnectionDiagnostics(GhostApp app) { _app = app; }
-        public Task<ConnectionDiagnosticResults> RunDiagnosticsAsync(ConnectionDiagnosticRequest request) =>
-                Task.FromResult(new ConnectionDiagnosticResults
-                {
-                        IsDaemonRunning = false,
-                        IsRedisAvailable = _app.Bus is RedisGhostBus
-                });
-        public Task<bool> IsDaemonProcessRunningAsync() => Task.FromResult(false);
-        public Task<bool> TryStartDaemonAsync() => Task.FromResult(false);
+        public Task<ConnectionDiagnosticResults> RunDiagnosticsAsync(ConnectionDiagnosticRequest request)
+        {
+            return Task.FromResult(new ConnectionDiagnosticResults
+            {
+                    IsDaemonRunning = false,
+                    IsRedisAvailable = _app.Bus is RedisGhostBus
+            });
+        }
+        public Task<bool> IsDaemonProcessRunningAsync()
+        {
+            return Task.FromResult(false);
+        }
+        public Task<bool> TryStartDaemonAsync()
+        {
+            return Task.FromResult(false);
+        }
     }
 
 #endregion

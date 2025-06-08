@@ -1,35 +1,18 @@
-using Ghost;
+using System.Diagnostics;
 using Ghost.Exceptions;
 using Ghost.Storage;
 using Spectre.Console;
 using Spectre.Console.Cli;
-using System.Diagnostics;
-
 namespace Ghost.Father.CLI.Commands;
 
 public class PullCommand : AsyncCommand<PullCommand.Settings>
 {
-    private readonly IGhostBus _bus;
     private const string GHOSTS_FOLDER = "ghosts";
+    private readonly IGhostBus _bus;
 
     public PullCommand(IGhostBus bus)
     {
         _bus = bus;
-    }
-
-    public class Settings : CommandSettings
-    {
-        [CommandArgument(0, "[repository]")]
-        public string Repository { get; set; }
-
-        [CommandOption("--branch")]
-        public string Branch { get; set; } = "main";
-
-        [CommandOption("--run")]
-        public bool RunAfterPull { get; set; }
-
-        [CommandOption("--force")]
-        public bool Force { get; set; }
     }
 
     public override async Task<int> ExecuteAsync(CommandContext context, Settings settings)
@@ -56,11 +39,11 @@ public class PullCommand : AsyncCommand<PullCommand.Settings>
             // Check for uncommitted changes
             if (await HasChanges())
             {
-                var status = await GetGitStatus();
+                string? status = await GetGitStatus();
                 AnsiConsole.MarkupLine("\n[yellow]Uncommitted changes:[/]");
                 AnsiConsole.Write(new Panel(status)
-                    .Border(BoxBorder.Rounded)
-                    .BorderStyle(Style.Parse("grey")));
+                        .Border(BoxBorder.Rounded)
+                        .BorderStyle(Style.Parse("grey")));
 
                 if (!settings.Force)
                 {
@@ -78,23 +61,23 @@ public class PullCommand : AsyncCommand<PullCommand.Settings>
 
             // Pull changes
             await AnsiConsole.Status()
-                .StartAsync("Pulling changes...", async ctx =>
-                {
-                    var pullCommand = $"pull origin {settings.Branch}";
-                    if (settings.Force)
+                    .StartAsync("Pulling changes...", async ctx =>
                     {
-                        pullCommand += " --force";
-                    }
+                        string? pullCommand = $"pull origin {settings.Branch}";
+                        if (settings.Force)
+                        {
+                            pullCommand += " --force";
+                        }
 
-                    await RunGitCommand(pullCommand);
-                });
+                        await RunGitCommand(pullCommand);
+                    });
 
             AnsiConsole.MarkupLine("[green]Successfully pulled changes[/]");
 
             // Run app if requested
             if (settings.RunAfterPull)
             {
-                var appName = Path.GetFileName(Directory.GetCurrentDirectory());
+                string? appName = Path.GetFileName(Directory.GetCurrentDirectory());
                 await RunApp(appName);
             }
 
@@ -112,14 +95,14 @@ public class PullCommand : AsyncCommand<PullCommand.Settings>
         try
         {
             // Extract app name from repository URL
-            var appName = Path.GetFileNameWithoutExtension(settings.Repository)
-                .Replace(".git", "", StringComparison.OrdinalIgnoreCase);
+            string? appName = Path.GetFileNameWithoutExtension(settings.Repository)
+                    .Replace(".git", "", StringComparison.OrdinalIgnoreCase);
 
             // Create the ghosts directory
-            var ghostsPath = Path.Combine(AppContext.BaseDirectory, GHOSTS_FOLDER);
+            string? ghostsPath = Path.Combine(AppContext.BaseDirectory, GHOSTS_FOLDER);
             Directory.CreateDirectory(ghostsPath);
 
-            var targetDir = Path.Combine(ghostsPath, appName);
+            string? targetDir = Path.Combine(ghostsPath, appName);
 
             // Check if directory already exists
             if (Directory.Exists(targetDir) && !settings.Force)
@@ -136,16 +119,16 @@ public class PullCommand : AsyncCommand<PullCommand.Settings>
 
             // Clone repository
             await AnsiConsole.Status()
-                .StartAsync($"Cloning {appName}...", async ctx =>
-                {
-                    var cloneCommand = $"clone {settings.Repository} {targetDir}";
-                    if (settings.Branch != "main")
+                    .StartAsync($"Cloning {appName}...", async ctx =>
                     {
-                        cloneCommand += $" -b {settings.Branch}";
-                    }
+                        string? cloneCommand = $"clone {settings.Repository} {targetDir}";
+                        if (settings.Branch != "main")
+                        {
+                            cloneCommand += $" -b {settings.Branch}";
+                        }
 
-                    await RunGitCommand(cloneCommand);
-                });
+                        await RunGitCommand(cloneCommand);
+                    });
 
             AnsiConsole.MarkupLine($"[green]Successfully cloned {appName} to {targetDir}[/]");
 
@@ -166,14 +149,14 @@ public class PullCommand : AsyncCommand<PullCommand.Settings>
 
     private async Task RunApp(string appName)
     {
-        var command = new SystemCommand
+        SystemCommand? command = new SystemCommand
         {
-            CommandId = Guid.NewGuid().ToString(),
-            CommandType = "run",
-            Parameters = new Dictionary<string, string>
-            {
-                ["appId"] = appName
-            }
+                CommandId = Guid.NewGuid().ToString(),
+                CommandType = "run",
+                Parameters = new Dictionary<string, string>
+                {
+                        ["appId"] = appName
+                }
         };
 
         await _bus.PublishAsync("ghost:commands", command);
@@ -195,7 +178,7 @@ public class PullCommand : AsyncCommand<PullCommand.Settings>
 
     private static async Task<bool> HasChanges()
     {
-        var output = await RunGitCommandWithOutput("status --porcelain");
+        string? output = await RunGitCommandWithOutput("status --porcelain");
         return !string.IsNullOrWhiteSpace(output);
     }
 
@@ -206,48 +189,63 @@ public class PullCommand : AsyncCommand<PullCommand.Settings>
 
     private static async Task RunGitCommand(string args)
     {
-        var startInfo = new ProcessStartInfo
+        ProcessStartInfo? startInfo = new ProcessStartInfo
         {
-            FileName = "git",
-            Arguments = args,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            UseShellExecute = false,
-            CreateNoWindow = true
+                FileName = "git",
+                Arguments = args,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                UseShellExecute = false,
+                CreateNoWindow = true
         };
 
-        var process = Process.Start(startInfo);
+        Process? process = Process.Start(startInfo);
         await process.WaitForExitAsync();
 
         if (process.ExitCode != 0)
         {
-            var error = await process.StandardError.ReadToEndAsync();
+            string? error = await process.StandardError.ReadToEndAsync();
             throw new GhostException($"Git command failed: {error}", ErrorCode.GitError);
         }
     }
 
     private static async Task<string> RunGitCommandWithOutput(string args)
     {
-        var startInfo = new ProcessStartInfo
+        ProcessStartInfo? startInfo = new ProcessStartInfo
         {
-            FileName = "git",
-            Arguments = args,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            UseShellExecute = false,
-            CreateNoWindow = true
+                FileName = "git",
+                Arguments = args,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                UseShellExecute = false,
+                CreateNoWindow = true
         };
 
-        var process = Process.Start(startInfo);
-        var output = await process.StandardOutput.ReadToEndAsync();
+        Process? process = Process.Start(startInfo);
+        string? output = await process.StandardOutput.ReadToEndAsync();
         await process.WaitForExitAsync();
 
         if (process.ExitCode != 0)
         {
-            var error = await process.StandardError.ReadToEndAsync();
+            string? error = await process.StandardError.ReadToEndAsync();
             throw new GhostException($"Git command failed: {error}", ErrorCode.GitError);
         }
 
         return output;
+    }
+
+    public class Settings : CommandSettings
+    {
+        [CommandArgument(0, "[repository]")]
+        public string Repository { get; set; }
+
+        [CommandOption("--branch")]
+        public string Branch { get; set; } = "main";
+
+        [CommandOption("--run")]
+        public bool RunAfterPull { get; set; }
+
+        [CommandOption("--force")]
+        public bool Force { get; set; }
     }
 }

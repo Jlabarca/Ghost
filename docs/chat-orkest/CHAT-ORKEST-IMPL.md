@@ -18,7 +18,7 @@ Read this tracker first, then the phase you were assigned. Four layers, each own
 | Gateway | Who pays? | Ghost gateway |
 | Thread store + UI | What happened? | Chat app (new, React) |
 
-Botanic (LibreChat) stays the unmodified image. Do not bridge its store to the chat app. Every model call from every layer goes through Ghost with `x-ware-thread` and `x-ware-turn` headers. Orkest dials out to the chat app over WebSocket; the chat app never reaches into a machine. Approvals: Orkest pauses the harness, the chat app shows the request, the decision returns with `expectedVersion`. No model and no client may approve on its own. Wire types live in `contract/` (CO.1); `protocol.draft.ts` next to this file is the starting point. Only tick checklist items of your own phase. Report deviations in LOGBOOK, never silently.
+Botanic (LibreChat) stays the unmodified image. Do not bridge its store to the chat app. Every model call from every layer goes through Ghost (LiteLLM 1.85 + Ghost policy layer, see AI-GATEWAY-REVIEW.md) with `x-litellm-trace-id: <threadId>` and `x-litellm-spend-logs-metadata: {turn, harness, machine, source}`. Runs that cannot proxy (Claude Code on its own Max login) post usage to the ledger as `source: reported`. Orkest dials out to the chat app over WebSocket; the chat app never reaches into a machine. Approvals: Orkest pauses the harness, the chat app shows the request, the decision returns with `expectedVersion`. No model and no client may approve on its own. Wire types live in `contract/` (CO.1); `protocol.draft.ts` next to this file is the starting point. Only tick checklist items of your own phase. Report deviations in LOGBOOK, never silently.
 
 ## Architecture
 
@@ -62,13 +62,13 @@ flowchart LR
 ```json
 { "name": "claude-code", "launch": ["claude-code-acp"], "protocol": "acp",
   "fallback": { "launch": ["claude", "-p", "--output-format", "stream-json"], "protocol": "claude-stream-json" },
-  "gatewayEnv": { "ANTHROPIC_BASE_URL": "{ghost}/anthropic", "ANTHROPIC_CUSTOM_HEADERS": "x-ware-thread: {thread}\nx-ware-turn: {turn}" },
+  "gatewayEnv": { "ANTHROPIC_BASE_URL": "{ghost}/anthropic", "ANTHROPIC_CUSTOM_HEADERS": "x-litellm-trace-id: {thread}\nx-litellm-spend-logs-metadata: {meta}" },
   "skillRoots": [".claude/skills"], "approvals": true }
 ```
 
 **Embedding into Orkest (Vue).** No vuera. (A) Full view: iframe or tab at `/t/{id}?embed=1` with a small `postMessage` contract (`open-thread`, `thread-status`, `approval-needed`). (B) Inline: the chat app ships a `<ware-thread thread-id compact>` custom element (React inside a shadow root). Vue uses it via `compilerOptions.isCustomElement`.
 
-**Ghost must speak:** Anthropic `/v1/messages` (Claude Code), OpenAI `/v1/responses` (Codex), OpenAI-compatible chat completions (chat app via `@ai-sdk/openai-compatible`, and Grok Build if it uses xAI's API), all with streaming usage and thread header passthrough.
+**Ghost must speak:** Anthropic `/v1/messages` (Claude Code), OpenAI `/v1/responses` (Codex), OpenAI-compatible chat completions (chat app via `@ai-sdk/openai-compatible`, and Grok Build if it uses xAI's API), all with streaming usage and thread header passthrough. LiteLLM covers `/v1/messages` (documented Claude Code setup); Responses for Codex and xAI for Grok are to verify. The Max broker is never a work-thread upstream (no tools, no streaming).
 
 ## Open Questions
 
@@ -109,12 +109,13 @@ Dependencies: CO.0a, CO.0b, CO.1 and HARNESS-PARITY run in parallel. CO.2 needs 
 
 ### Phase 0a — Gateway spike (Ghost gateway)
 
-- [ ] CO.0a.1 `curl` streaming call through Ghost on Anthropic `/v1/messages`, OpenAI `/v1/responses`, OpenAI chat completions. Record which exist and which need translation.
-- [ ] CO.0a.2 Headers `x-ware-thread` / `x-ware-turn` reach Ghost's usage record on all three.
-- [ ] CO.0a.3 Streaming usage is captured (final usage chunk or equivalent) for each shape.
-- [ ] CO.0a.4 Tool calls survive the hop (one tool round trip per shape).
-- [ ] CO.0a.5 One real `claude -p` with `ANTHROPIC_BASE_URL` → Ghost and `ANTHROPIC_CUSTOM_HEADERS`. Note the auth/billing change (API key vs subscription login).
-- [ ] CO.0a.6 Write results to `docs/research/gateway-shapes-spike.md` in the gateway repo. No production code in this phase.
+- [ ] CO.0a.1 Streaming call through Ghost on `/v1/messages`, `/v1/responses`, chat completions with an Orkest test key. Record which work and which need config.
+- [ ] CO.0a.2 `x-litellm-trace-id` lands in `LiteLLM_SpendLogs.session_id`; `x-litellm-spend-logs-metadata` lands in the row metadata, on all three shapes. Add the check to `smoke.sh`.
+- [ ] CO.0a.3 Streaming usage is captured for each shape (cost on the spend row).
+- [ ] CO.0a.4 One tool round trip per shape survives the hop.
+- [ ] CO.0a.5 One real `claude -p` with `ANTHROPIC_BASE_URL` + `ANTHROPIC_AUTH_TOKEN` (virtual key) → Ghost, on a tool-capable API lane. Record the cost of the run vs the harness's own reported cost.
+- [ ] CO.0a.6 Add consumer `orkest-<machine>` in `consumers.json`: tool-capable lanes only, no `claude-max*`. Smoke asserts the broker refuses it.
+- [ ] CO.0a.7 Write `docs/research/gateway-shapes-spike.md` in the gateway repo. Ledger API and reported usage (AI-GATEWAY-REVIEW items 2-3) are designed there, built in CO.2.
 
 ### Phase 0b — ACP spike (Orkest)
 
@@ -136,7 +137,7 @@ Dependencies: CO.0a, CO.0b, CO.1 and HARNESS-PARITY run in parallel. CO.2 needs 
 
 - [ ] CO.2.1 Next.js + assistant-ui + AI SDK v7. `/api/chat` → `createOpenAICompatible` → Ghost, with thread/turn headers.
 - [ ] CO.2.2 Postgres + Drizzle store (`threads`, `turns`, `items`, `approvals`); `ThreadHistoryAdapter` round-trips `UIMessage`.
-- [ ] CO.2.3 Thread list with kind filter; turn cost shown from Ghost usage.
+- [ ] CO.2.3 Thread list with kind filter; turn cost and served model from the Ghost ledger API (`GET /ledger/threads/{id}`, built in the gateway repo alongside this phase, plus `POST /ledger/usage` for reported runs).
 - [ ] CO.2.4 `/t/{id}` and `/t/{id}?embed=1` (no chrome) + `postMessage` contract.
 - [ ] CO.2.5 Auth: single-user token is fine for MVP; account id is on every thread.
 
@@ -193,6 +194,7 @@ _(none yet)_
 
 | File | Purpose |
 |---|---|
+| `docs/chat-orkest/AI-GATEWAY-REVIEW.md` | What the gateway is, verdict, alternatives, improvement list. |
 | `docs/chat-orkest/protocol.draft.ts` | Starting point for CO.1 types. |
 | `docs/chat-orkest/ORCHESTRATION.md` | How to run this with an orchestrator session and worker sessions; prompts. |
 | `D:\ware\chat\contract\` | Planned. Wire contract. |

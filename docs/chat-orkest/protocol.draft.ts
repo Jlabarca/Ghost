@@ -90,7 +90,7 @@ export interface HarnessRow {
   launch: string[];
   protocol: "acp" | "claude-stream-json" | "codex-app-server";
   fallback?: { launch: string[]; protocol: HarnessRow["protocol"] };
-  gatewayEnv: Record<string, string>; // templated: {ghost} {thread} {turn}
+  gatewayEnv: Record<string, string>; // templated: {ghost} {thread} {meta}; thread → x-litellm-trace-id, meta → x-litellm-spend-logs-metadata
   skillRoots: string[]; // informational; GhostDev owns projection
   approvals: boolean;
 }

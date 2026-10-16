@@ -1,6 +1,6 @@
 # How to run CHAT-ORKEST + HARNESS-PARITY
 
-> One orchestrator session (Opus) at `D:\ware`. Cheaper worker sessions (Sonnet) each in one repo path, one phase at a time. The orchestrator writes prompts, starts workers, audits their commits, and is the only one that flips a phase to done.
+> One orchestrator session at `D:\ware` (Grok Build for the big run: see [GROK-RUN.md](GROK-RUN.md) and [HANDOFF.md](HANDOFF.md); any strong model works). Cheaper worker sessions (Sonnet) each in one repo path, one phase at a time. The orchestrator writes prompts, starts workers, audits their commits, and is the only one that flips a phase to done.
 
 ## Setup (once)
 
@@ -30,7 +30,7 @@
 
 ---
 
-## Prompt: orchestrator session (Opus, cwd `D:\ware`)
+## Prompt: orchestrator session (short form; the big-run version is GROK-RUN.md)
 
 ```
 You orchestrate two trackers:

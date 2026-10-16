@@ -18,7 +18,7 @@ Read this tracker first, then the phase you were assigned. Four layers, each own
 | Gateway | Who pays? | Ghost gateway |
 | Thread store + UI | What happened? | Chat app (new, React) |
 
-Botanic (LibreChat) stays the unmodified image. Do not bridge its store to the chat app. Every model call from every layer goes through Ghost (LiteLLM 1.85 + Ghost policy layer, see AI-GATEWAY-REVIEW.md) with `x-litellm-trace-id: <threadId>` and `x-litellm-spend-logs-metadata: {turn, harness, machine, source}`. Runs that cannot proxy (Claude Code on its own Max login) post usage to the ledger as `source: reported`. Orkest dials out to the chat app over WebSocket; the chat app never reaches into a machine. Approvals: Orkest pauses the harness, the chat app shows the request, the decision returns with `expectedVersion`. No model and no client may approve on its own. Wire types live in `contract/` (CO.1); `protocol.draft.ts` next to this file is the starting point. Only tick checklist items of your own phase. Report deviations in LOGBOOK, never silently.
+Botanic (LibreChat) stays the unmodified image. Do not bridge its store to the chat app. Every model call from every layer goes through Ghost (LiteLLM 1.85 + Ghost policy layer, see AI-GATEWAY-REVIEW.md) with `x-litellm-trace-id: <threadId>` and `x-litellm-spend-logs-metadata: {turn, harness, machine, source}`. Runs that cannot proxy (Claude Code on its own Max login) post usage to the ledger as `source: reported`. Orkest dials out to the chat app over WebSocket; the chat app never reaches into a machine. Approvals: Orkest pauses the harness, the chat app shows the request, the decision returns with `expectedVersion`. No model and no client may approve on its own. Wire types live in `contract/` (CO.1); `protocol.draft.ts` next to this file is the starting point. Billing default D1 (HANDOFF.md): Claude Code work threads run on an API-key lane through Ghost; never through `ghost-claude-broker`. Only tick checklist items of your own phase. Report deviations in LOGBOOK, never silently.
 
 ## Architecture
 
@@ -194,6 +194,8 @@ _(none yet)_
 
 | File | Purpose |
 |---|---|
+| `docs/chat-orkest/HANDOFF.md` | Decisions, defaults, repos, traps. Read first. |
+| `docs/chat-orkest/GROK-RUN.md` | Orchestrator prompt for the big run. |
 | `docs/chat-orkest/AI-GATEWAY-REVIEW.md` | What the gateway is, verdict, alternatives, improvement list. |
 | `docs/chat-orkest/protocol.draft.ts` | Starting point for CO.1 types. |
 | `docs/chat-orkest/ORCHESTRATION.md` | How to run this with an orchestrator session and worker sessions; prompts. |

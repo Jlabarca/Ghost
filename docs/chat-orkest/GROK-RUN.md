@@ -18,7 +18,9 @@ STEP 0 — setup (do it yourself)
 3. Locate code: where the Ghost AI gateway config lives (expect D:\ware\Ghost\infrastructure\docker\litellm), and where GhostShell / Orkest UI and runner code live (search D:\ware\Ghost and D:\ware\GhostDev). Write the real paths into the "Repo" column of the CHAT-ORKEST Implementation Status table and into HANDOFF.md "Repos involved". Fix the relative link to HARNESS-PARITY-IMPL.md at the top of the tracker. Commit.
 4. Apply the HARNESS-PARITY addendum from ORCHESTRATION.md to D:\ware\GhostDev\docs\HARNESS-PARITY-IMPL.md (items only, no code). Commit in GhostDev.
 5. Do not invoke /run-impl or any skill from .agents/skills inside Ghost or Rompe (stale copy, see HANDOFF "Known traps"). Workers follow tracker text.
-6. Billing default D1 (HANDOFF.md) applies: Claude Code work threads use an API-key lane through Ghost. Do not build reported usage unless I override.
+6. Preflight the worker command: run one trivial worker (`WORKER` with prompt "reply OK", model sonnet) in D:\ware\GhostDev. If it fails on auth (expired OAuth), stop and tell me to run `claude auth login`; launch nothing until it passes.
+7. GhostDev may hold uncommitted HARNESS-PARITY work from an earlier stopped run. Never discard it: commit it as-is to branch `hp/recovered-wip` (message "wip: recovered uncommitted HARNESS-PARITY work, unreviewed"), return main to clean, and give the phase 1/2 workers that branch as input to review and adopt or drop item by item. Run `tools/smoke-tools.ps1` on clean main and record the baseline failures in the GhostDev tracker's Known Bugs before phase 1, so workers are not blamed for pre-existing failures.
+8. Billing default D1 (HANDOFF.md) applies: Claude Code work threads use an API-key lane through Ghost. Do not build reported usage unless I override.
 
 WAVES (from ORCHESTRATION.md; launch every worker of a wave in parallel, never two workers in the same working tree — use `git worktree add` when two phases share a repo)
 - Wave 1: HARNESS-PARITY.1→5 (GhostDev, one worker per phase, sequential) · CO.0a (gateway) · CO.0b (Orkest repo) · CO.1 (create D:\ware\chat; model opus).

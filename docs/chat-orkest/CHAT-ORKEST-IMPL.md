@@ -47,7 +47,7 @@ flowchart LR
 **Data model (Codex shape).**
 
 - Thread: `id`, `kind`, `account`, `title`, `status` (`idle | running | waiting_approval | done | failed | interrupted`), `version`. For `work`: `machine`, `cwd`, `harness`, `harnessVersion`, `packHash`, `level`.
-- Turn: `id`, `threadId`, `input`, `status`, `usage` (from Ghost, summed by `x-ware-turn`), `startedAt`, `endedAt`.
+- Turn: `id`, `threadId`, `input`, `status`, `usage` (from Ghost, summed by the `turn` field in `x-litellm-spend-logs-metadata`), `startedAt`, `endedAt`.
 - Item: `message | reasoning | tool_call | command | file_change | approval_request | artifact | error`. `command` has cmd, cwd, output, exit code. `file_change` has path and unified diff. `approval_request` has id, summary, options, `expectedVersion`, resolution.
 
 **Wire: Orkest ↔ chat app** (JSON over WebSocket, Orkest dials out, auth by machine token):
